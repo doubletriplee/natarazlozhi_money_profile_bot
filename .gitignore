@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+!.env.test.example
+.venv/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite3
+*.db
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+data/cities500.zip
+data/cities.sqlite3
+runtime/
+backups/
+cards/
+*.aesgcm
+/стиль 1.png
+/стиль 2.png

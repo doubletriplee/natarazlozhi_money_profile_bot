@@ -1,0 +1,28 @@
+services:
+  app:
+    image: ${APP_IMAGE:-natarazlozhi-money-profile-bot:local}
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ./runtime/data:/data
+    cpus: 0.5
+    mem_limit: 384m
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
