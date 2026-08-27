@@ -208,6 +208,14 @@ class AdminAudit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class AdminIdentity(Base):
+    __tablename__ = "admin_identities"
+
+    slot: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_id_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class FsmRecord(Base):
     __tablename__ = "fsm_records"
 

@@ -4,7 +4,6 @@ import asyncio
 import logging
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import aiohttp
 from aiogram import Bot, Dispatcher
@@ -71,7 +70,7 @@ async def serve() -> None:
                 bot,
                 store,
                 CardRenderer(settings.bot_username),
-                Path("/data/cards" if settings.app_env.value == "production" else "runtime/cards"),
+                settings.card_output_directory,
             )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)

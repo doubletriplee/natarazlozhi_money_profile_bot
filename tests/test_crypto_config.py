@@ -7,7 +7,7 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from pydantic import ValidationError
 
-from money_profile_bot.config import Environment, Settings
+from money_profile_bot.config import Environment, PaymentMode, Settings
 from money_profile_bot.crypto import CryptoBox
 
 
@@ -49,3 +49,12 @@ def test_production_rejects_incomplete_configuration() -> None:
 def test_invalid_robokassa_algorithm_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(robokassa_hash_algorithm="crc32", _env_file=None)
+
+
+def test_production_rejects_fake_payment_mode() -> None:
+    with pytest.raises(ValidationError, match="PAYMENT_MODE=robokassa"):
+        Settings(
+            app_env=Environment.PRODUCTION,
+            payment_mode=PaymentMode.FAKE,
+            _env_file=None,
+        )

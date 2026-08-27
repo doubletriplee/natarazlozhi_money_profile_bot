@@ -14,7 +14,14 @@ from money_profile_bot.config import Settings
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
 from money_profile_bot.domain import BirthData
-from money_profile_bot.models import DeliveryItem, Order, OrderStatus, Payment, ProfileStatus
+from money_profile_bot.models import (
+    AdminIdentity,
+    DeliveryItem,
+    Order,
+    OrderStatus,
+    Payment,
+    ProfileStatus,
+)
 from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 from money_profile_bot.services.rules import generate_profile
@@ -158,3 +165,52 @@ async def test_delete_removes_personal_profile_but_keeps_payment_journal(
     assert await service.profile_access(10001) is None
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+
+
+@pytest.mark.asyncio
+async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    facts = calculate_chart(birth)
+    result = generate_profile(facts)
+    profile_id = await service.save_calculation(10001, birth, facts, result)
+
+    link = await service.create_fake_paid_order(telegram_id=10001, profile_id=profile_id)
+    repeated = await service.create_fake_paid_order(telegram_id=10001, profile_id=profile_id)
+
+    assert not link.reused
+    assert repeated.reused
+    assert repeated.order_id == link.order_id
+    async with database.sessions() as session:
+        order = await session.get(Order, link.order_id)
+        assert order is not None
+        assert order.provider == "fake"
+        assert order.amount_minor == 0
+        assert order.status == OrderStatus.PAID
+        assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(DeliveryItem)
+                .where(DeliveryItem.order_id == link.order_id)
+            )
+            == 8
+        )
+
+
+@pytest.mark.asyncio
+async def test_first_start_admin_claim_is_atomic(store: tuple[Store, Database]) -> None:
+    service, database = store
+    claims = await asyncio.gather(
+        service.claim_admin_if_unset(10001),
+        service.claim_admin_if_unset(20002),
+    )
+
+    assert sum(claim.newly_claimed for claim in claims) == 1
+    winner = 10001 if claims[0].is_admin else 20002
+    loser = 20002 if winner == 10001 else 10001
+    assert await service.is_admin(winner, frozenset())
+    assert not await service.is_admin(loser, frozenset())
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(AdminIdentity)) == 1

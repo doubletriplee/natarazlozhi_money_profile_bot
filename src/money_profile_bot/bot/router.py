@@ -21,7 +21,7 @@ from aiogram.types import (
 )
 
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
-from money_profile_bot.config import Settings
+from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.domain import BirthData, City, TimePrecision
 from money_profile_bot.models import OrderStatus, ProfileStatus
 from money_profile_bot.services.astro import calculate_chart
@@ -84,6 +84,12 @@ def build_router(
             return
         source = command.args if command.args and START_RE.fullmatch(command.args) else "direct"
         await store.ensure_user(message.from_user.id, source)
+        if settings.bootstrap_admin_on_first_start:
+            claim = await store.claim_admin_if_unset(message.from_user.id)
+            if claim.newly_claimed:
+                await message.answer(
+                    "Вы назначены администратором тестового бота. Команда статистики: /stats."
+                )
         await store.record_event(message.from_user.id, "bot_started")
         access = await store.profile_access(message.from_user.id)
         if access and access.profile_status == ProfileStatus.PAID:
@@ -289,12 +295,20 @@ def build_router(
             await callback.message.answer(f"Важно: {facts.warning}")
         await callback.message.answer(result.free_insight)
         await store.record_event(callback.from_user.id, "offer_viewed")
-        await callback.message.answer(
+        description = (
             "Полный разбор состоит из шести сообщений и персональной карточки: денежный тип, "
             "сильная сторона, формат работы, стиль продаж, одна ловушка и эксперимент на семь дней. "
-            f"Стоимость — {_price(settings)}.",
-            reply_markup=_keyboard((f"Получить за {_price(settings)}", f"buy:{profile_id}")),
         )
+        if settings.payment_mode is PaymentMode.FAKE:
+            description += (
+                f"В рабочей версии стоимость составит {_price(settings)}. "
+                "Сейчас действует бесплатный тест без списания денег и без чека."
+            )
+            button = ("Получить бесплатно (тест)", f"buy:{profile_id}")
+        else:
+            description += f"Стоимость — {_price(settings)}."
+            button = (f"Получить за {_price(settings)}", f"buy:{profile_id}")
+        await callback.message.answer(description, reply_markup=_keyboard(button))
 
     @router.callback_query(F.data.startswith("buy:"))
     async def buy(callback: CallbackQuery, state: FSMContext) -> None:
@@ -305,6 +319,25 @@ def build_router(
             return
         if access.order_status in (OrderStatus.PAID, OrderStatus.DELIVERED):
             await callback.answer("Оплата уже получена. Откройте /profile.", show_alert=True)
+            return
+        if settings.payment_mode is PaymentMode.FAKE:
+            try:
+                order = await store.create_fake_paid_order(
+                    telegram_id=callback.from_user.id,
+                    profile_id=profile_id,
+                )
+            except RuntimeError:
+                await callback.answer("Не удалось открыть тестовый результат", show_alert=True)
+                return
+            await state.clear()
+            await store.record_event(callback.from_user.id, "fake_payment_succeeded")
+            delivery.notify()
+            await callback.answer("Тестовый доступ открыт")
+            if callback.message:
+                await callback.message.answer(
+                    f"Тестовый заказ {order.code} подтверждён без списания денег. "
+                    "Отправляю полный результат."
+                )
             return
         await state.set_state(ProfileForm.email)
         await state.update_data(payment_profile_id=profile_id)
@@ -460,7 +493,9 @@ def build_router(
 
     @router.message(Command("stats"))
     async def stats(message: Message) -> None:
-        if not message.from_user or message.from_user.id not in settings.admin_ids:
+        if not message.from_user or not await store.is_admin(
+            message.from_user.id, settings.admin_ids
+        ):
             return
         await message.answer(
             "Выберите период:",
@@ -474,7 +509,7 @@ def build_router(
 
     @router.callback_query(F.data.startswith("stats:"))
     async def stats_period(callback: CallbackQuery) -> None:
-        if callback.from_user.id not in settings.admin_ids:
+        if not await store.is_admin(callback.from_user.id, settings.admin_ids):
             await callback.answer()
             return
         period = (callback.data or "").split(":", 1)[1]
@@ -509,7 +544,9 @@ def build_router(
 
     @router.message(Command("refund"))
     async def refund(message: Message, command: CommandObject) -> None:
-        if not message.from_user or message.from_user.id not in settings.admin_ids:
+        if not message.from_user or not await store.is_admin(
+            message.from_user.id, settings.admin_ids
+        ):
             return
         parts = (command.args or "").split()
         if len(parts) not in (1, 2):

@@ -6,7 +6,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from aiohttp import web
 
-from money_profile_bot.config import Settings
+from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.robokassa import RobokassaClient
 from money_profile_bot.services.store import Store
@@ -63,16 +63,25 @@ def create_web_app(
         operator = html.escape(settings.operator_name or "[ФИО оператора необходимо заполнить]")
         inn = html.escape(settings.operator_inn or "[ИНН необходимо заполнить]")
         email = html.escape(settings.operator_email or "[email необходимо заполнить]")
+        payment_data = (
+            "В тестовом режиме email и платёжные данные не запрашиваются."
+            if settings.payment_mode is PaymentMode.FAKE
+            else "Email используется только для электронного чека. Платёжные реквизиты карты бот не получает."
+        )
+        providers = (
+            "Telegram используется как платформа общения, хостинг — для работы приложения."
+            if settings.payment_mode is PaymentMode.FAKE
+            else "Telegram используется как платформа общения, Robokassa — для оплаты и автоматического формирования чека, хостинг — для работы приложения."
+        )
         body = f"""
 <p class="meta">Версия документа: {html.escape(settings.legal_docs_version)}</p>
 <p>Оператор персональных данных: {operator}, самозанятый, ИНН {inn}, контакт: {email}.</p>
 <h2>Какие данные обрабатываются</h2><p>Числовой идентификатор Telegram, имя, дата, время и место рождения,
-email для электронного чека, согласия, результат расчёта, оценка и технические события.</p>
+согласия, результат расчёта, оценка и технические события. {html.escape(payment_data)}</p>
 <h2>Цели и основания</h2><p>Данные нужны для выполнения расчёта, заключения и исполнения договора,
 приёма оплаты, выдачи результата, поддержки, безопасности и исполнения требований законодательства.
 Основания: согласие пользователя, исполнение договора и обязанности оператора.</p>
-<h2>Получатели</h2><p>Telegram используется как платформа общения, Robokassa — для оплаты и
-автоматического формирования чека, хостинг — для работы приложения. Платёжные реквизиты карты бот не получает.</p>
+<h2>Получатели</h2><p>{html.escape(providers)}</p>
 <h2>Хранение и защита</h2><p>Персональные поля шифруются. Неоплаченные анкеты удаляются через
 {settings.profile_draft_retention_days} дней. Резервные копии хранятся {settings.backup_retention_days} дней.
 Минимальный платёжный журнал хранится {settings.payment_retention_days or "[срок не утверждён]"} дней.</p>
@@ -89,23 +98,37 @@ email для электронного чека, согласия, результ
         operator = html.escape(settings.operator_name or "[ФИО оператора необходимо заполнить]")
         inn = html.escape(settings.operator_inn or "[ИНН необходимо заполнить]")
         price = f"{settings.product_price_rub.quantize(Decimal('0.01'))} ₽"
+        payment_terms = (
+            f"""<h2>Тестовый режим</h2><p>Рабочая цена одного профиля — {html.escape(price)}.
+Во время закрытого теста результат выдаётся бесплатно: деньги не списываются, платёж не проводится,
+электронный чек не формируется.</p>"""
+            if settings.payment_mode is PaymentMode.FAKE
+            else f"""<h2>Стоимость и оплата</h2><p>Стоимость одного профиля — {html.escape(price)}.
+Платёж проводится на странице Robokassa в рублях. Электронный чек направляется на email, указанный
+пользователем. Результат открывается только после серверного подтверждения платежа. Один платёж
+относится к одному зафиксированному набору исходных данных.</p>"""
+        )
+        refund_terms = (
+            "<h2>Исправления</h2><p>В тестовом режиме возврат не требуется, поскольку списания нет. "
+            if settings.payment_mode is PaymentMode.FAKE
+            else "<h2>Исправления и возвраты</h2><p>Если исходные данные были введены ошибочно или результат не доставлен, "
+        )
         body = f"""
 <p class="meta">Версия документа: {html.escape(settings.legal_docs_version)}</p>
 <p>Исполнитель: {operator}, самозанятый, ИНН {inn}. Пользователь должен быть старше 18 лет.</p>
 <h2>Предмет</h2><p>Сервис создаёт индивидуальную астрологическую интерпретацию «Денежный профиль»
 по введённым пользователем данным. Результат состоит из шести сообщений и изображения и выдаётся в Telegram.</p>
-<h2>Стоимость и оплата</h2><p>Стоимость одного профиля — {html.escape(price)}. Платёж проводится на странице
-Robokassa в рублях. Электронный чек направляется на email, указанный пользователем. Результат открывается только
-после серверного подтверждения платежа. Один платёж относится к одному зафиксированному набору исходных данных.</p>
-<h2>Исправления и возвраты</h2><p>Если исходные данные были введены ошибочно или результат не доставлен,
-обратитесь к <a href="https://t.me/{html.escape(settings.support_username)}">@{html.escape(settings.support_username)}</a>
-и укажите код заказа. Возврат рассматривается исполнителем и проводится через Robokassa тем же способом оплаты.</p>
+{payment_terms}
+{refund_terms}Обратитесь к <a href="https://t.me/{html.escape(settings.support_username)}">@{html.escape(settings.support_username)}</a>
+и укажите код заказа.</p>
 <h2>Ограничение</h2><p>Разбор предназначен для развлечения и самонаблюдения. Он не является финансовой,
 инвестиционной, налоговой или юридической рекомендацией, не предсказывает доход и не гарантирует результат.</p>
 <p class="meta">Это проект оферты. До запуска документ и реквизиты должен проверить владелец или юрист.</p>"""
         return web.Response(text=_page("Условия использования", body), content_type="text/html")
 
     async def payment_result(request: web.Request) -> web.Response:
+        if settings.payment_mode is not PaymentMode.ROBOKASSA:
+            raise web.HTTPNotFound()
         if request.method == "POST":
             posted = await request.post()
             data = {str(key): str(value) for key, value in posted.items()}
@@ -139,6 +162,8 @@ Robokassa в рублях. Электронный чек направляетс�
         return web.Response(text=f"OK{invoice_id}", content_type="text/plain")
 
     async def payment_result2(_: web.Request) -> web.Response:
+        if settings.payment_mode is not PaymentMode.ROBOKASSA:
+            raise web.HTTPNotFound()
         # ResultURL2 is not trusted to authorize delivery. Refund data is queried through OpStateExt.
         return web.Response(status=204)
 

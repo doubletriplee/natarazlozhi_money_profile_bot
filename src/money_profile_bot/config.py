@@ -16,6 +16,11 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
+class PaymentMode(StrEnum):
+    ROBOKASSA = "robokassa"
+    FAKE = "fake"
+
+
 def _development_key(label: str) -> str:
     digest = hashlib.sha256(f"money-profile:{label}:development-only".encode()).digest()
     return base64.urlsafe_b64encode(digest).decode()
@@ -35,7 +40,9 @@ class Settings(BaseSettings):
     support_username: str = "simnatali"
     admin_telegram_ids: str = ""
     test_access_telegram_ids: str = ""
+    bootstrap_admin_on_first_start: bool = False
     product_price_rub: Decimal = Field(default=Decimal("149.00"), gt=0)
+    payment_mode: PaymentMode = PaymentMode.ROBOKASSA
 
     robokassa_merchant_login: str = ""
     robokassa_password1: str = ""
@@ -49,6 +56,7 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite+aiosqlite:///./runtime/money_profile.sqlite3"
     geonames_database_path: Path = Path("data/cities.sqlite3")
+    card_output_directory: Path = Path("runtime/cards")
 
     public_base_url: str = "https://money.natarazlozhi.ru"
     source_repository_url: str = "https://github.com/doubletriplee/natarazlozhi_money_profile_bot"
@@ -99,6 +107,8 @@ class Settings(BaseSettings):
             missing.append("BOT_TOKEN")
         if not self.admin_ids:
             missing.append("ADMIN_TELEGRAM_IDS")
+        if self.bootstrap_admin_on_first_start:
+            missing.append("BOOTSTRAP_ADMIN_ON_FIRST_START=false")
         if self.legal_docs_version.upper() == "DRAFT":
             missing.append("LEGAL_DOCS_VERSION")
         if not self.operator_name:
@@ -125,6 +135,8 @@ class Settings(BaseSettings):
             missing.append("ROBOKASSA_PASSWORD3")
         if self.robokassa_test_mode:
             missing.append("ROBOKASSA_TEST_MODE=false")
+        if self.payment_mode is not PaymentMode.ROBOKASSA:
+            missing.append("PAYMENT_MODE=robokassa")
         if not self.payment_platform_risk_acknowledged:
             missing.append("PAYMENT_PLATFORM_RISK_ACKNOWLEDGED")
         if not self.app_encryption_key:
@@ -183,3 +195,4 @@ def ensure_runtime_directories(settings: Settings) -> None:
         if db_path and db_path != ":memory:":
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     settings.geonames_database_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.card_output_directory.mkdir(parents=True, exist_ok=True)

@@ -17,6 +17,7 @@ from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.domain import BirthData, ChartFacts, GeneratedProfile
 from money_profile_bot.models import (
     AdminAudit,
+    AdminIdentity,
     Consent,
     DeliveryItem,
     DeliveryStatus,
@@ -62,6 +63,12 @@ class CallbackResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AdminClaim:
+    is_admin: bool
+    newly_claimed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ProfileAccess:
     profile_id: str
     profile_status: str
@@ -82,6 +89,7 @@ class Store:
         self.crypto = crypto
         self.robokassa = robokassa
         self._payment_lock = asyncio.Lock()
+        self._admin_lock = asyncio.Lock()
 
     async def ensure_user(self, telegram_id: int, source: str | None = None) -> User:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
@@ -104,6 +112,25 @@ class Store:
             session.add(user)
             await session.flush()
             return user
+
+    async def claim_admin_if_unset(self, telegram_id: int) -> AdminClaim:
+        """Atomically claim the single bootstrap-admin slot in a one-process deployment."""
+        digest = self.crypto.lookup(str(telegram_id), context="admin-telegram-id")
+        async with self._admin_lock:
+            async with self.sessions() as session, session.begin():
+                identity = await session.get(AdminIdentity, 1)
+                if identity:
+                    return AdminClaim(identity.telegram_id_hash == digest, False)
+                session.add(AdminIdentity(slot=1, telegram_id_hash=digest))
+                return AdminClaim(True, True)
+
+    async def is_admin(self, telegram_id: int, configured_ids: frozenset[int]) -> bool:
+        if telegram_id in configured_ids:
+            return True
+        digest = self.crypto.lookup(str(telegram_id), context="admin-telegram-id")
+        async with self.sessions() as session:
+            identity = await session.get(AdminIdentity, 1)
+            return bool(identity and secrets.compare_digest(identity.telegram_id_hash, digest))
 
     async def record_event(
         self, telegram_id: int | None, name: str, metadata: dict[str, object] | None = None
@@ -289,6 +316,71 @@ class Store:
             order.status = OrderStatus.INVOICE_CREATED
         return OrderLink(order_id, code, invoice.payment_url, False)
 
+    async def create_fake_paid_order(self, *, telegram_id: int, profile_id: str) -> OrderLink:
+        """Create a zero-value test order and unlock delivery without contacting a provider."""
+        async with self._payment_lock:
+            user = await self.ensure_user(telegram_id)
+            async with self.sessions() as session:
+                existing = await session.scalar(
+                    select(Order)
+                    .where(
+                        Order.user_id == user.id,
+                        Order.profile_id == profile_id,
+                        Order.provider == "fake",
+                        Order.status.in_(
+                            (
+                                OrderStatus.PENDING,
+                                OrderStatus.PAID,
+                                OrderStatus.DELIVERED,
+                            )
+                        ),
+                    )
+                    .order_by(Order.created_at.desc())
+                )
+            if existing:
+                if existing.status == OrderStatus.PENDING:
+                    result = await self._accept_payment_callback_locked(
+                        invoice_id=existing.provider_invoice_id,
+                        amount_minor=0,
+                        email=None,
+                    )
+                    return OrderLink(existing.id, existing.code, "", not result.newly_paid)
+                return OrderLink(existing.id, existing.code, "", True)
+
+            for _ in range(5):
+                order_id = new_id()
+                code = _order_code()
+                invoice_id = _invoice_id()
+                try:
+                    async with self.sessions() as session, session.begin():
+                        session.add(
+                            Order(
+                                id=order_id,
+                                code=code,
+                                user_id=user.id,
+                                profile_id=profile_id,
+                                amount_minor=0,
+                                provider="fake",
+                                provider_invoice_id=invoice_id,
+                                receipt_email_encrypted=self.crypto.encrypt(
+                                    "test-without-receipt", context=f"order.email:{order_id}"
+                                ),
+                                status=OrderStatus.PENDING,
+                            )
+                        )
+                    break
+                except IntegrityError:
+                    continue
+            else:
+                raise RuntimeError("cannot allocate a unique test order")
+
+            await self._accept_payment_callback_locked(
+                invoice_id=invoice_id,
+                amount_minor=0,
+                email=None,
+            )
+            return OrderLink(order_id, code, "", False)
+
     async def accept_payment_callback(
         self, *, invoice_id: int, amount_minor: int, email: str | None
     ) -> CallbackResult:
@@ -350,7 +442,13 @@ class Store:
                 Event(
                     user_id=order.user_id,
                     name="payment_succeeded",
-                    metadata_json=json.dumps({"amount_minor": amount_minor, "currency": "RUB"}),
+                    metadata_json=json.dumps(
+                        {
+                            "amount_minor": amount_minor,
+                            "currency": "RUB",
+                            "provider": order.provider,
+                        }
+                    ),
                 )
             )
             return CallbackResult(order.id, True)
@@ -484,6 +582,8 @@ class Store:
                 raise LookupError("order not found")
             if order.status not in (OrderStatus.PAID, OrderStatus.DELIVERED):
                 raise ValueError("order is not refundable")
+            if order.provider != "robokassa":
+                raise ValueError("test orders do not have refundable payments")
             order.refund_confirmation_hash = self.crypto.lookup(
                 f"{order.id}:{token}", context="refund-confirmation"
             )
@@ -505,6 +605,8 @@ class Store:
                 raise ValueError("refund confirmation is invalid or expired")
             if order.status not in (OrderStatus.PAID, OrderStatus.DELIVERED):
                 raise ValueError("order is not refundable")
+            if order.provider != "robokassa":
+                raise ValueError("test orders do not have refundable payments")
             payment = await session.scalar(select(Payment).where(Payment.order_id == order.id))
             if not payment:
                 raise LookupError("payment journal entry not found")
@@ -641,6 +743,12 @@ class Store:
                 )
             await session.execute(
                 update(Event).where(Event.user_id == user.id).values(user_id=None)
+            )
+            await session.execute(
+                delete(AdminIdentity).where(
+                    AdminIdentity.telegram_id_hash
+                    == self.crypto.lookup(str(telegram_id), context="admin-telegram-id")
+                )
             )
             user.telegram_id_encrypted = "deleted"
             user.telegram_id_hash = self.crypto.lookup(
