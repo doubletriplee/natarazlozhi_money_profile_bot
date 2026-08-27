@@ -6,6 +6,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    extra_hosts:
+      # The deployment network currently routes this Telegram IPv4 while its DNS answer does not.
+      - "api.telegram.org:${TELEGRAM_API_IPV4:-149.154.167.220}"
     ports:
       - "127.0.0.1:18080:8080"
     volumes:
