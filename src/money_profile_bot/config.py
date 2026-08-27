@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     app_env: Environment = Environment.DEVELOPMENT
     bot_token: str = ""
     bot_username: str = "money_profile_bot"
+    telegram_proxy_url: str = ""
     support_username: str = "simnatali"
     admin_telegram_ids: str = ""
     test_access_telegram_ids: str = ""

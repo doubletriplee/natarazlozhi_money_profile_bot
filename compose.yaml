@@ -6,9 +6,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    extra_hosts:
-      # The deployment network currently routes this Telegram IPv4 while its DNS answer does not.
-      - "api.telegram.org:${TELEGRAM_API_IPV4:-149.154.167.220}"
+    depends_on:
+      telegram-proxy:
+        condition: service_healthy
     ports:
       - "127.0.0.1:18080:8080"
     volumes:
@@ -29,3 +29,45 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  telegram-proxy:
+    image: ${TELEGRAM_PROXY_IMAGE:-money-profile-telegram-proxy:local}
+    build:
+      context: ./deploy/telegram-proxy
+    restart: unless-stopped
+    command:
+      - -NT
+      - -D
+      - 0.0.0.0:1080
+      - -o
+      - BatchMode=yes
+      - -o
+      - ExitOnForwardFailure=yes
+      - -o
+      - ServerAliveInterval=20
+      - -o
+      - ServerAliveCountMax=3
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/run/ssh/known_hosts
+      - -i
+      - /run/ssh/id_ed25519
+      - tgproxy@${TELEGRAM_PROXY_HOST}
+    volumes:
+      - ./runtime/ssh:/run/ssh:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=4m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 32m
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "1080"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

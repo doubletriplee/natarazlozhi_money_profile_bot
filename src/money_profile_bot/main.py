@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiohttp import web
 
@@ -65,6 +66,7 @@ async def serve() -> None:
             bot = Bot(
                 settings.bot_token,
                 default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+                session=AiohttpSession(proxy=settings.telegram_proxy_url or None),
             )
             delivery = DeliveryWorker(
                 bot,
