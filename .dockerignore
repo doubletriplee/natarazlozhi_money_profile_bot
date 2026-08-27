@@ -10,4 +10,3 @@ backups
 cards
 *.png
 !assets/**/*.png
-

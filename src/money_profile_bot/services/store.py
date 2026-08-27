@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import string
@@ -80,6 +81,7 @@ class Store:
         self.sessions = sessions
         self.crypto = crypto
         self.robokassa = robokassa
+        self._payment_lock = asyncio.Lock()
 
     async def ensure_user(self, telegram_id: int, source: str | None = None) -> User:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
@@ -288,6 +290,14 @@ class Store:
         return OrderLink(order_id, code, invoice.payment_url, False)
 
     async def accept_payment_callback(
+        self, *, invoice_id: int, amount_minor: int, email: str | None
+    ) -> CallbackResult:
+        async with self._payment_lock:
+            return await self._accept_payment_callback_locked(
+                invoice_id=invoice_id, amount_minor=amount_minor, email=email
+            )
+
+    async def _accept_payment_callback_locked(
         self, *, invoice_id: int, amount_minor: int, email: str | None
     ) -> CallbackResult:
         async with self.sessions() as session, session.begin():
@@ -623,6 +633,11 @@ class Store:
                     update(Order)
                     .where(Order.profile_id.in_(profile_ids))
                     .values(receipt_email_encrypted="deleted")
+                )
+                await session.execute(
+                    update(DeliveryItem)
+                    .where(DeliveryItem.order_id.in_(order_ids))
+                    .values(telegram_message_id=None)
                 )
             await session.execute(
                 update(Event).where(Event.user_id == user.id).values(user_id=None)

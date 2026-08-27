@@ -105,6 +105,10 @@ class Settings(BaseSettings):
             missing.append("OPERATOR_NAME")
         if not self.operator_inn:
             missing.append("OPERATOR_INN")
+        if not self.operator_email:
+            missing.append("OPERATOR_EMAIL")
+        if self.source_commit == "development" or len(self.source_commit) < 7:
+            missing.append("SOURCE_COMMIT")
         if self.payment_retention_days <= 0:
             missing.append("PAYMENT_RETENTION_DAYS")
         if not self.methodology_approved:

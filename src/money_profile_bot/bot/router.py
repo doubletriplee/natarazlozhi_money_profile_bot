@@ -82,7 +82,7 @@ def build_router(
         if settings.test_access_ids and message.from_user.id not in settings.test_access_ids:
             await message.answer("Тестовый бот доступен только участникам закрытого теста.")
             return
-        source = command.args if command.args and START_RE.fullmatch(command.args) else None
+        source = command.args if command.args and START_RE.fullmatch(command.args) else "direct"
         await store.ensure_user(message.from_user.id, source)
         await store.record_event(message.from_user.id, "bot_started")
         access = await store.profile_access(message.from_user.id)

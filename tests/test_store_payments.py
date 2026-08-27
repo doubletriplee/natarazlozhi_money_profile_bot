@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,6 +111,21 @@ async def test_duplicate_payment_callback_is_idempotent(
         invoice_id=invoice_id, amount_minor=14900, email=None
     )
     assert first.newly_paid and not second.newly_paid
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_payment_callbacks_are_serialized(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    _, invoice_id, _ = await prepared_order(service, birth)
+    results = await asyncio.gather(
+        service.accept_payment_callback(invoice_id=invoice_id, amount_minor=14900, email=None),
+        service.accept_payment_callback(invoice_id=invoice_id, amount_minor=14900, email=None),
+    )
+    assert sorted(result.newly_paid for result in results) == [False, True]
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Payment)) == 1
 
