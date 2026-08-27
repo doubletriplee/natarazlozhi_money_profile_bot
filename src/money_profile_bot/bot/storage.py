@@ -39,8 +39,10 @@ class EncryptedDatabaseStorage(BaseStorage):
         async with self.sessions() as session, session.begin():
             record = await session.get(FsmRecord, digest)
             if record is None:
-                record = FsmRecord(key_hash=digest)
-                session.add(record)
+                if state_value is None:
+                    return
+                session.add(FsmRecord(key_hash=digest, state=state_value))
+                return
             record.state = state_value
             if record.state is None and record.data_encrypted is None:
                 await session.delete(record)
