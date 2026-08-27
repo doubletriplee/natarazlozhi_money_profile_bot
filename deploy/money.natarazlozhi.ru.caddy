@@ -9,20 +9,4 @@ money.natarazlozhi.ru {
         -Server
     }
 
-    log {
-        output file /var/log/caddy/money-profile-access.log {
-            roll_size 10MiB
-            roll_keep 5
-        }
-        format filter {
-            wrap json
-            fields {
-                request>headers>Cookie delete
-                request>headers>Authorization delete
-                request>uri query {
-                    replace REDACTED
-                }
-            }
-        }
-    }
 }
