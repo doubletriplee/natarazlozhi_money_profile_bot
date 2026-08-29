@@ -181,7 +181,13 @@ class Store:
     async def save_consent(self, telegram_id: int, documents_version: str) -> None:
         user = await self.ensure_user(telegram_id)
         async with self.sessions() as session, session.begin():
-            session.add(Consent(user_id=user.id, documents_version=documents_version))
+            session.add(
+                Consent(
+                    user_id=user.id,
+                    documents_version=documents_version,
+                    adult_confirmed=False,
+                )
+            )
 
     async def save_calculation(
         self,

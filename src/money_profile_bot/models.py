@@ -66,7 +66,7 @@ class Consent(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     documents_version: Mapped[str] = mapped_column(String(64))
-    adult_confirmed: Mapped[bool] = mapped_column(Boolean, default=True)
+    adult_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

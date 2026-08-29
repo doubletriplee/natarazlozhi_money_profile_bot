@@ -21,6 +21,7 @@ from money_profile_bot.database import Database
 from money_profile_bot.domain import BirthData
 from money_profile_bot.models import (
     AdminIdentity,
+    Consent,
     DeliveryItem,
     DeliveryStatus,
     FormReminder,
@@ -78,6 +79,21 @@ async def prepared_order(store: Store, birth: BirthData) -> tuple[str, int, str]
         order = await session.get(Order, link.order_id)
         assert order is not None
         return link.order_id, order.provider_invoice_id, profile_id
+
+
+@pytest.mark.asyncio
+async def test_consent_does_not_record_unasked_adult_confirmation(
+    store: tuple[Store, Database],
+) -> None:
+    service, database = store
+
+    await service.save_consent(10001, "legal-v1")
+
+    async with database.sessions() as session:
+        consent = await session.scalar(select(Consent))
+    assert consent is not None
+    assert consent.documents_version == "legal-v1"
+    assert consent.adult_confirmed is False
 
 
 @pytest.mark.asyncio

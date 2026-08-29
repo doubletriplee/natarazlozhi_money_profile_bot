@@ -38,7 +38,10 @@ from money_profile_bot.services.rules import generate_profile, validate_generate
 from money_profile_bot.services.store import ReminderButtons, Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-CONSENT_REMINDER_PROMPT = "Нажми «Узнать свой аватар», чтобы продолжить."
+CONSENT_BUTTON_TEXT = "Согласна, продолжить"
+CONSENT_REMINDER_PROMPT = (
+    "Нажми «Согласна, продолжить», чтобы подтвердить согласие и перейти к анкете."
+)
 BIRTH_DATE_PROMPT = "Введи дату рождения в формате ДД.ММ.ГГГГ."
 TIME_PRECISION_PROMPT = "Насколько точно известно время рождения?"
 CITY_PROMPT = (
@@ -118,7 +121,7 @@ def form_reminder_payload(state: str, data: dict[str, Any]) -> tuple[str, Remind
     if state == ProfileForm.consent.state:
         return (
             CONSENT_REMINDER_PROMPT,
-            ((("Узнать свой аватар", "consent:yes"),),),
+            (((CONSENT_BUTTON_TEXT, "consent:yes"),),),
         )
     if state in {ProfileForm.name.state, ProfileForm.birth_date.state}:
         return BIRTH_DATE_PROMPT, ()
@@ -179,7 +182,7 @@ def _intro_keyboard(settings: Settings) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Условия", url=f"{settings.public_base_url}/terms"),
                 InlineKeyboardButton(text="Политика", url=f"{settings.public_base_url}/privacy"),
             ],
-            [InlineKeyboardButton(text="Узнать свой аватар", callback_data="consent:yes")],
+            [InlineKeyboardButton(text=CONSENT_BUTTON_TEXT, callback_data="consent:yes")],
         ]
     )
 

@@ -49,7 +49,9 @@ def test_intro_copy_and_image_are_complete() -> None:
     assets = AvatarAssets(ASSET_DIRECTORY)
     assert assets.first_message_image().is_file()
     assert INTRO_CAPTION.startswith("Узнай свой Денежный аватар 💫")
-    assert INTRO_CAPTION.endswith("А кто ты среди них?")
+    assert "А кто ты среди них?" in INTRO_CAPTION
+    assert "соглашаешься на обработку даты, времени и места рождения" in INTRO_CAPTION
+    assert "не является финансовой рекомендацией" in INTRO_CAPTION
     assert "Мой авторский метод, который покажет" in INTRO_CAPTION
     assert (
         "<b>через что тебе легче создавать ценность, проявляться, продавать и "
@@ -135,7 +137,7 @@ def test_birth_date_validation_has_no_adult_age_gate() -> None:
 def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
     buttons = _reminder_buttons(_intro_keyboard(Settings(_env_file=None)))
 
-    assert buttons == ((("Узнать свой аватар", "consent:yes"),),)
+    assert buttons == ((("Согласна, продолжить", "consent:yes"),),)
 
 
 @pytest.mark.asyncio
@@ -151,7 +153,7 @@ async def test_begin_sends_intro_photo_and_skips_age_gate() -> None:
     kwargs = message.answer_photo.await_args.kwargs
     assert kwargs["caption"] == INTRO_CAPTION
     buttons = kwargs["reply_markup"].inline_keyboard
-    assert buttons[-1][0].text == "Узнать свой аватар"
+    assert buttons[-1][0].text == "Согласна, продолжить"
     assert not hasattr(ProfileForm, "adult")
     assert not hasattr(ProfileForm, "email")
 
