@@ -33,6 +33,9 @@ async def test_fake_mode_legal_pages_disclose_that_no_purchase_occurs() -> None:
         terms = await terms_response.text()
 
     assert "списание денег не производится" in privacy
+    assert "Симоненко Наталья Сергеевна" in privacy
+    assert "026108860870" in privacy
+    assert "natali.nata5689@mail.ru" in privacy
     assert "Платёжный оператор в тестовом сценарии не используется" in privacy
     assert "Тестовая запись об открытии результата удаляется через 30 дней" in privacy
     assert "не сохраняет\nподтверждение совершеннолетия" in privacy
