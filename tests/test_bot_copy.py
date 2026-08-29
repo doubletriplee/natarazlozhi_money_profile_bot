@@ -10,6 +10,7 @@ import pytest
 from aiogram.types import Chat, Message, User
 
 from money_profile_bot.bot.router import (
+    TestAccessMiddleware,
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
@@ -19,7 +20,6 @@ from money_profile_bot.bot.router import (
     _sales_keyboard,
     _send_free_avatar,
     build_router,
-    TestAccessMiddleware,
 )
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
 from money_profile_bot.config import Settings
