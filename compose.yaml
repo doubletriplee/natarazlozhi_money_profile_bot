@@ -6,6 +6,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      AVATAR_ASSET_DIRECTORY: /app/assets/avatars
+      PDF_OUTPUT_DIRECTORY: /data/pdfs
     depends_on:
       telegram-proxy:
         condition: service_healthy
