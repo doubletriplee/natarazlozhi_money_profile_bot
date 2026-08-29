@@ -14,7 +14,11 @@ from money_profile_bot.services.avatar import (
     AvatarAssets,
     avatar_paid_caption,
 )
-from money_profile_bot.services.delivery import FULL_READING_TRIGGER_TEXT, DeliveryWorker
+from money_profile_bot.services.delivery import (
+    FULL_READING_IMAGE_URL,
+    FULL_READING_TRIGGER_TEXT,
+    DeliveryWorker,
+)
 
 ASSET_DIRECTORY = Path("assets/avatars")
 
@@ -60,21 +64,22 @@ async def test_paid_avatar_is_sent_as_photo_with_complete_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_reading_offer_uses_exact_caption_and_prefilled_contact_link() -> None:
+async def test_full_reading_offer_uses_image_preview_and_prefilled_contact_link() -> None:
     bot, _store, worker = _worker_context("full_reading_offer")
 
     await worker.deliver("order-1")
 
-    photo_args = bot.send_photo.await_args.args
-    assert photo_args[0] == 123456
-    assert Path(photo_args[1].path) == ASSET_DIRECTORY / "full_reading_offer.png"
     args = bot.send_message.await_args.args
     kwargs = bot.send_message.await_args.kwargs
     assert args == (123456, FULL_READING_CAPTION)
+    preview = kwargs["link_preview_options"]
+    assert preview.url == FULL_READING_IMAGE_URL
+    assert preview.prefer_large_media is True
+    assert preview.show_above_text is True
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Хочу денежный разбор"
     assert parse_qs(urlparse(button.url).query) == {"text": [SALES_MESSAGE_TEXT]}
-    bot.send_photo.assert_awaited_once()
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio
