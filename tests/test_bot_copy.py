@@ -10,6 +10,7 @@ import pytest
 
 from money_profile_bot.bot.router import (
     OFFER_DELAY_SECONDS,
+    _accept_consent,
     _begin,
     _birth_date_is_plausible,
     _sales_keyboard,
@@ -85,8 +86,13 @@ def test_every_avatar_has_channel_and_professions_copy() -> None:
         assert AVATAR_CHANNELS[avatar_name].startswith("Твой основной канал —")
         paid_caption = avatar_paid_caption(avatar_name)
         assert AVATAR_PROFESSIONS[avatar_name] in paid_caption
+        assert "<b>Профессии:</b>" in paid_caption
         assert "<b>Онлайн:</b>" in paid_caption
         assert "<b>Офлайн:</b>" in paid_caption
+        assert paid_caption.index("<b>Сильная сторона:</b>") < paid_caption.index(
+            "<b>Профессии:</b>"
+        )
+        assert paid_caption.index("<b>Профессии:</b>") < paid_caption.index("<b>Формат работы:</b>")
         assert len(re.sub(r"<[^>]+>", "", paid_caption)) <= 1024
 
 
@@ -129,6 +135,22 @@ async def test_begin_sends_intro_photo_and_skips_age_gate() -> None:
     assert buttons[-1][0].text == "Узнать свой аватар"
     assert not hasattr(ProfileForm, "adult")
     assert not hasattr(ProfileForm, "email")
+
+
+@pytest.mark.asyncio
+async def test_consent_skips_name_and_requests_birth_date() -> None:
+    callback = AsyncMock()
+    callback.from_user.id = 123456
+    state = AsyncMock()
+    store = AsyncMock()
+    settings = Settings(_env_file=None)
+
+    await _accept_consent(callback, state, settings, store)
+
+    store.save_consent.assert_awaited_once_with(123456, settings.legal_docs_version)
+    state.set_state.assert_awaited_once_with(ProfileForm.birth_date)
+    callback.message.answer.assert_awaited_once_with("Введи дату рождения в формате ДД.ММ.ГГГГ.")
+    assert all("Как тебя зовут?" not in str(call) for call in callback.mock_calls)
 
 
 @pytest.mark.asyncio

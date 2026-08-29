@@ -38,7 +38,6 @@ from money_profile_bot.services.rules import generate_profile, validate_generate
 from money_profile_bot.services.store import Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-NAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё .'-]{0,58}[A-Za-zА-Яа-яЁё.]$")
 OFFER_DELAY_SECONDS = 4
 
 
@@ -142,6 +141,21 @@ async def _send_free_avatar_and_offer(
     )
 
 
+async def _accept_consent(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    store: Store,
+) -> None:
+    if not callback.from_user:
+        return
+    await store.save_consent(callback.from_user.id, settings.legal_docs_version)
+    await state.set_state(ProfileForm.birth_date)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer("Введи дату рождения в формате ДД.ММ.ГГГГ.")
+
+
 def build_router(
     settings: Settings,
     store: Store,
@@ -173,21 +187,12 @@ def build_router(
 
     @router.callback_query(ProfileForm.consent, F.data == "consent:yes")
     async def consent(callback: CallbackQuery, state: FSMContext) -> None:
-        if not callback.from_user:
-            return
-        await store.save_consent(callback.from_user.id, settings.legal_docs_version)
-        await state.set_state(ProfileForm.name)
-        await callback.answer()
-        if callback.message:
-            await callback.message.answer("Как тебя зовут?")
+        await _accept_consent(callback, state, settings, store)
 
+    # Пользователи, остановившиеся на удалённом шаге до обновления, продолжают
+    # анкету без сохранения отправленного имени.
     @router.message(ProfileForm.name)
-    async def name(message: Message, state: FSMContext) -> None:
-        value = (message.text or "").strip()
-        if len(value) > 60 or len(value) < 2 or not NAME_RE.fullmatch(value):
-            await message.answer("Введи имя длиной 2–60 символов, без цифр и служебных знаков.")
-            return
-        await state.update_data(name=value)
+    async def legacy_name(message: Message, state: FSMContext) -> None:
         await state.set_state(ProfileForm.birth_date)
         await message.answer("Введи дату рождения в формате ДД.ММ.ГГГГ.")
 
@@ -302,7 +307,7 @@ def build_router(
             else "не указано"
         )
         summary = (
-            f"Проверь данные:\n\nИмя: {html.escape(data['name'])}\n"
+            "Проверь данные:\n\n"
             f"Дата: {datetime.fromisoformat(data['birth_date']).strftime('%d.%m.%Y')}\n"
             f"Время: {time_text} ({precision_names[data['time_precision']]})\n"
             f"Место: {html.escape(_city_label(City(**selected)))}"
@@ -328,7 +333,7 @@ def build_router(
         await callback.answer("Рассчитываю профиль…")
         raw = await state.get_data()
         birth = BirthData(
-            name=raw["name"],
+            name="",
             birth_date=date.fromisoformat(raw["birth_date"]),
             time_precision=TimePrecision(raw["time_precision"]),
             birth_time=time.fromisoformat(raw["birth_time"]) if raw.get("birth_time") else None,

@@ -443,8 +443,13 @@ def avatar_caption(money_type: str) -> str:
 
 def avatar_paid_caption(money_type: str) -> str:
     avatar = display_avatar_name(money_type)
+    strength, remaining_blocks = AVATAR_PRESENTATIONS[avatar].caption.split("\n\n", maxsplit=1)
     return (
-        f"<b>{avatar}</b>\n\n{AVATAR_PRESENTATIONS[avatar].caption}\n\n{AVATAR_PROFESSIONS[avatar]}"
+        f"<b>{avatar}</b>\n\n"
+        f"{strength}\n\n"
+        f"<b>Профессии:</b>\n\n"
+        f"{AVATAR_PROFESSIONS[avatar]}\n\n"
+        f"{remaining_blocks}"
     )
 
 
