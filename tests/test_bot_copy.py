@@ -115,7 +115,7 @@ def test_sales_link_prefills_exact_message() -> None:
     assert FULL_READING_CAPTION.endswith("реализация и твой способ проявляться.")
     assert "Сохрани эти подсказки — к ним стоит возвращаться 🤍" in FULL_READING_CAPTION
     assert "<b>всю твою денежную картину</b>" in FULL_READING_CAPTION
-    assert len(FULL_READING_CAPTION) <= 4096
+    assert len(re.sub(r"<[^>]+>", "", FULL_READING_CAPTION)) <= 1024
 
 
 def test_strength_offer_has_practical_transition_paragraph() -> None:

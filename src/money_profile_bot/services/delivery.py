@@ -7,12 +7,7 @@ from decimal import Decimal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import (
-    FSInputFile,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    LinkPreviewOptions,
-)
+from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from money_profile_bot.models import DeliveryStatus
 from money_profile_bot.services.avatar import (
@@ -27,10 +22,6 @@ from money_profile_bot.services.store import Store
 logger = logging.getLogger(__name__)
 
 FULL_READING_TRIGGER_TEXT = "Узнать всю денежную картину"
-FULL_READING_IMAGE_URL = (
-    "https://raw.githubusercontent.com/doubletriplee/"
-    "natarazlozhi_money_profile_bot/main/assets/avatars/full_reading_offer.png"
-)
 
 
 class DeliveryWorker:
@@ -93,14 +84,10 @@ class DeliveryWorker:
                         reply_markup=self._full_reading_trigger_keyboard(order.id),
                     )
                 elif item.kind == "full_reading_offer":
-                    sent = await self.bot.send_message(
+                    sent = await self.bot.send_photo(
                         telegram_id,
-                        FULL_READING_CAPTION,
-                        link_preview_options=LinkPreviewOptions(
-                            url=FULL_READING_IMAGE_URL,
-                            prefer_large_media=True,
-                            show_above_text=True,
-                        ),
+                        FSInputFile(self.avatars.full_reading_offer_image()),
+                        caption=FULL_READING_CAPTION,
                         reply_markup=InlineKeyboardMarkup(
                             inline_keyboard=[
                                 [
