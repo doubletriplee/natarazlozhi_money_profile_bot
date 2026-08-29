@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -201,7 +202,7 @@ async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
 
 
 @pytest.mark.asyncio
-async def test_full_reading_offer_is_scheduled_one_minute_after_avatar_result(
+async def test_full_reading_offer_is_scheduled_twenty_seconds_after_avatar_result(
     store: tuple[Store, Database], birth: BirthData
 ) -> None:
     service, database = store
@@ -242,6 +243,7 @@ async def test_full_reading_offer_is_scheduled_one_minute_after_avatar_result(
             tzinfo=None
         )
         assert delay == FULL_READING_DELAY
+        assert delay == timedelta(seconds=20)
 
     assert order_id not in await service.pending_order_ids()
 

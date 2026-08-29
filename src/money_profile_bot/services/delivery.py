@@ -68,10 +68,9 @@ class DeliveryWorker:
                         caption=avatar_paid_caption(result.money_type),
                     )
                 elif item.kind == "full_reading_offer":
-                    sent = await self.bot.send_photo(
+                    sent = await self.bot.send_message(
                         telegram_id,
-                        FSInputFile(self.avatars.full_reading_offer_image()),
-                        caption=FULL_READING_CAPTION,
+                        FULL_READING_CAPTION,
                         reply_markup=InlineKeyboardMarkup(
                             inline_keyboard=[
                                 [

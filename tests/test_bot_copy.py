@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -8,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from money_profile_bot.bot.router import (
+    OFFER_DELAY_SECONDS,
     _begin,
     _birth_date_is_plausible,
     _sales_keyboard,
@@ -16,7 +18,9 @@ from money_profile_bot.bot.router import (
 from money_profile_bot.bot.states import ProfileForm
 from money_profile_bot.config import Settings
 from money_profile_bot.services.avatar import (
+    AVATAR_CHANNELS,
     AVATAR_PRESENTATIONS,
+    AVATAR_PROFESSIONS,
     FULL_READING_CAPTION,
     INTRO_CAPTION,
     SALES_MESSAGE_TEXT,
@@ -39,10 +43,13 @@ REQUIRED_HEADINGS = (
 def test_intro_copy_and_image_are_complete() -> None:
     assets = AvatarAssets(ASSET_DIRECTORY)
     assert assets.first_message_image().is_file()
-    assert INTRO_CAPTION.startswith("✨Узнай свой Денежный аватар")
+    assert INTRO_CAPTION.startswith("Узнай свой Денежный аватар 💫")
     assert INTRO_CAPTION.endswith("А кто ты среди них?")
-    assert "Это мой авторский метод" in INTRO_CAPTION
-    assert "Денежный аватар — это мой" not in INTRO_CAPTION
+    assert "Мой авторский метод, который покажет" in INTRO_CAPTION
+    assert (
+        "<b>через что тебе легче создавать ценность, проявляться, продавать и "
+        "приходить к доходу.</b>"
+    ) in INTRO_CAPTION
     expected_avatars = (
         "✨ Муза",
         "🎙 Рассказчица",
@@ -71,6 +78,18 @@ def test_every_avatar_has_one_image_and_complete_caption() -> None:
         assert avatar_paid_caption(avatar_name).startswith(f"<b>{avatar_name}</b>\n\n")
 
 
+def test_every_avatar_has_channel_and_professions_copy() -> None:
+    assert AVATAR_CHANNELS.keys() == AVATAR_PRESENTATIONS.keys()
+    assert AVATAR_PROFESSIONS.keys() == AVATAR_PRESENTATIONS.keys()
+    for avatar_name in AVATAR_PRESENTATIONS:
+        assert AVATAR_CHANNELS[avatar_name].startswith("Твой основной канал —")
+        paid_caption = avatar_paid_caption(avatar_name)
+        assert AVATAR_PROFESSIONS[avatar_name] in paid_caption
+        assert "<b>Онлайн:</b>" in paid_caption
+        assert "<b>Офлайн:</b>" in paid_caption
+        assert len(re.sub(r"<[^>]+>", "", paid_caption)) <= 1024
+
+
 def test_sales_link_prefills_exact_message() -> None:
     url = sales_telegram_url("@simnatali")
     parsed = urlparse(url)
@@ -81,7 +100,9 @@ def test_sales_link_prefills_exact_message() -> None:
     assert "990₽" in FULL_READING_CAPTION
     assert "1 990 ₽" not in FULL_READING_CAPTION
     assert "990 ₽" not in FULL_READING_CAPTION
-    assert "<s>" not in FULL_READING_CAPTION
+    assert "Обычная стоимость — <s>1 990₽</s>" in FULL_READING_CAPTION
+    assert "<b>Твоя цена после Денежного аватара — 990₽</b>" in FULL_READING_CAPTION
+    assert len(FULL_READING_CAPTION) <= 4096
 
 
 def test_birth_date_validation_has_no_adult_age_gate() -> None:
@@ -142,6 +163,27 @@ async def test_all_free_avatar_results_are_followed_by_strength_offer(
     assert button.text == "Раскрыть силу - 149₽"
     assert button.callback_data == "buy:profile-1"
     assert message.answer_document.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_strength_offer_is_delayed_by_four_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = AsyncMock()
+    settings = Settings(_env_file=None)
+    assets = AvatarAssets(ASSET_DIRECTORY)
+    sleep = AsyncMock()
+    monkeypatch.setattr("money_profile_bot.bot.router.asyncio.sleep", sleep)
+
+    await _send_free_avatar_and_offer(
+        message,
+        profile_id="profile-1",
+        money_type="Муза",
+        free_insight="Бесплатный результат",
+        settings=settings,
+        avatars=assets,
+    )
+
+    assert OFFER_DELAY_SECONDS == 4
+    sleep.assert_awaited_once_with(4)
 
 
 def test_sales_keyboard_uses_single_configured_username() -> None:

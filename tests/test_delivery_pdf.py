@@ -20,6 +20,7 @@ ASSET_DIRECTORY = Path("assets/avatars")
 def _worker_context(kind: str) -> tuple[AsyncMock, AsyncMock, DeliveryWorker]:
     bot = AsyncMock()
     bot.send_photo.return_value = SimpleNamespace(message_id=42)
+    bot.send_message.return_value = SimpleNamespace(message_id=43)
     store = AsyncMock()
     store.delivery_context.return_value = (
         SimpleNamespace(id="order-1", profile_id="profile-1"),
@@ -45,6 +46,9 @@ async def test_paid_avatar_is_sent_as_photo_with_complete_text() -> None:
 
     kwargs = bot.send_photo.await_args.kwargs
     assert kwargs["caption"] == avatar_paid_caption("Навигатор")
+    assert "<b>Онлайн:</b>" in kwargs["caption"]
+    assert "<b>Офлайн:</b>" in kwargs["caption"]
+    bot.send_message.assert_not_awaited()
     store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=42)
     store.complete_delivery_if_ready.assert_awaited_once_with("order-1")
 
@@ -55,11 +59,13 @@ async def test_full_reading_offer_uses_exact_caption_and_prefilled_contact_link(
 
     await worker.deliver("order-1")
 
-    kwargs = bot.send_photo.await_args.kwargs
-    assert kwargs["caption"] == FULL_READING_CAPTION
+    args = bot.send_message.await_args.args
+    kwargs = bot.send_message.await_args.kwargs
+    assert args == (123456, FULL_READING_CAPTION)
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Хочу денежный разбор"
     assert parse_qs(urlparse(button.url).query) == {"text": [SALES_MESSAGE_TEXT]}
+    bot.send_photo.assert_not_awaited()
 
 
 @pytest.mark.asyncio

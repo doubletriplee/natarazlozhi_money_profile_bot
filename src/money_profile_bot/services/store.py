@@ -34,7 +34,7 @@ from money_profile_bot.models import (
 )
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 
-FULL_READING_DELAY = timedelta(minutes=1)
+FULL_READING_DELAY = timedelta(seconds=20)
 
 
 def _order_code() -> str:

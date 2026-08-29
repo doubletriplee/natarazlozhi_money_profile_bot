@@ -4,6 +4,7 @@ import pytest
 
 from money_profile_bot.domain import AspectFact, ChartFacts, PlanetFact
 from money_profile_bot.services.astro import ELEMENTS, SIGNS, element_for_sign
+from money_profile_bot.services.avatar import AVATAR_CHANNELS
 from money_profile_bot.services.rules import (
     HOUSE_TYPES,
     UNKNOWN_TYPES,
@@ -43,6 +44,7 @@ def test_all_twelve_house_types_are_deterministic(house: int) -> None:
     assert validate_generated_profile(profile) == []
     assert profile.free_insight.startswith("<b>Ваш денежный аватар —")
     assert "<b>Основной канал</b>\n" in profile.free_insight
+    assert AVATAR_CHANNELS[profile.money_type] in profile.free_insight
     assert "<b>Сильная сторона</b>\n" in profile.free_insight
     assert "Узнать больше" not in profile.free_insight
 

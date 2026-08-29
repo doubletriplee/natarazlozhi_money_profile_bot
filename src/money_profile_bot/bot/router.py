@@ -39,7 +39,7 @@ from money_profile_bot.services.store import Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 NAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё .'-]{0,58}[A-Za-zА-Яа-яЁё.]$")
-OFFER_DELAY_SECONDS = 15
+OFFER_DELAY_SECONDS = 4
 
 
 def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
