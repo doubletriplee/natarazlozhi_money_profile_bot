@@ -101,7 +101,7 @@ async def test_successful_callback_locks_profile_and_builds_delivery_queue(
             select(func.count()).select_from(DeliveryItem).where(DeliveryItem.order_id == order_id)
         )
         payments = await session.scalar(select(func.count()).select_from(Payment))
-    assert count == 8
+    assert count == 2
     assert payments == 1
 
 
@@ -195,7 +195,7 @@ async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
                 .select_from(DeliveryItem)
                 .where(DeliveryItem.order_id == link.order_id)
             )
-            == 8
+            == 2
         )
 
 

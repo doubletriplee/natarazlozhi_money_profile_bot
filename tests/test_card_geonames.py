@@ -7,11 +7,20 @@ import pytest
 from PIL import Image
 
 from money_profile_bot.services.card import CardRenderer
-from money_profile_bot.services.geonames import CityCatalog, normalize_city_name
+from money_profile_bot.services.geonames import (
+    CityCatalog,
+    city_query_candidates,
+    normalize_city_name,
+)
 
 
 def test_city_normalization_handles_yo_and_punctuation() -> None:
     assert normalize_city_name("Орёл, Россия") == "орел россия"
+
+
+def test_city_query_accepts_country_before_or_after_city() -> None:
+    assert "москва" in city_query_candidates("Россия, Москва")
+    assert "москва" in city_query_candidates("Москва Россия")
 
 
 @pytest.mark.asyncio
@@ -31,13 +40,19 @@ async def test_city_catalog_returns_ambiguous_results_by_population(tmp_path: Pa
         [
             (1, "Киров", "Кировская область", "RU", "Россия", 58.6, 49.6, "Europe/Kirov", 500000),
             (2, "Киров", "Калужская область", "RU", "Россия", 54.0, 34.3, "Europe/Moscow", 30000),
+            (3, "Москва", "Москва", "RU", "Россия", 55.75, 37.62, "Europe/Moscow", 13000000),
         ],
     )
-    connection.executemany("INSERT INTO city_names VALUES ('киров', ?)", [(1,), (2,)])
+    connection.executemany(
+        "INSERT INTO city_names VALUES (?, ?)",
+        [("киров", 1), ("киров", 2), ("москва", 3)],
+    )
     connection.commit()
     connection.close()
     results = await CityCatalog(database).search("Киров")
     assert [result.geoname_id for result in results] == [1, 2]
+    country_and_city = await CityCatalog(database).search("Россия, Москва")
+    assert country_and_city[0].geoname_id == 3
 
 
 @pytest.mark.parametrize(

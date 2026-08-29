@@ -18,8 +18,12 @@ build/
 data/cities500.zip
 data/cities.sqlite3
 runtime/
+tmp/
+output/
 backups/
 cards/
 *.aesgcm
+/*.png
+/*.pdf
 /стиль 1.png
 /стиль 2.png

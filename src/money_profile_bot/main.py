@@ -17,9 +17,10 @@ from money_profile_bot.bot.storage import EncryptedDatabaseStorage
 from money_profile_bot.config import Settings, ensure_runtime_directories
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
-from money_profile_bot.services.card import CardRenderer
+from money_profile_bot.services.avatar import AvatarAssets
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.geonames import CityCatalog
+from money_profile_bot.services.pdf import PdfRenderer
 from money_profile_bot.services.robokassa import RobokassaClient, RobokassaError
 from money_profile_bot.services.store import Store
 from money_profile_bot.web.app import create_web_app
@@ -68,17 +69,22 @@ async def serve() -> None:
                 default=DefaultBotProperties(parse_mode=ParseMode.HTML),
                 session=AiohttpSession(proxy=settings.telegram_proxy_url or None),
             )
+            avatars = AvatarAssets(settings.avatar_asset_directory)
             delivery = DeliveryWorker(
                 bot,
                 store,
-                CardRenderer(settings.bot_username),
-                settings.card_output_directory,
+                PdfRenderer(avatars),
+                settings.pdf_output_directory,
             )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)
             dispatcher.include_router(
                 build_router(
-                    settings, store, CityCatalog(settings.geonames_database_path), delivery
+                    settings,
+                    store,
+                    CityCatalog(settings.geonames_database_path),
+                    delivery,
+                    avatars,
                 )
             )
 

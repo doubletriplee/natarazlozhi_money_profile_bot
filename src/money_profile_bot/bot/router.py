@@ -15,6 +15,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BotCommand,
     CallbackQuery,
+    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -25,6 +26,7 @@ from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.domain import BirthData, City, TimePrecision
 from money_profile_bot.models import OrderStatus, ProfileStatus
 from money_profile_bot.services.astro import calculate_chart
+from money_profile_bot.services.avatar import AvatarAssets
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.geonames import CityCatalog
 from money_profile_bot.services.robokassa import RobokassaError
@@ -61,7 +63,7 @@ async def _begin(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ProfileForm.adult)
     await message.answer(
-        "«Денежный профиль» — персональная астрологическая интерпретация о стиле "
+        "«Денежный потенциал» — персональная астрологическая интерпретация о стиле "
         "монетизации, работе и продажах. Сначала подтвердите, что вам исполнилось 18 лет.",
         reply_markup=_keyboard(("Мне есть 18 лет", "adult:yes"), ("Мне нет 18 лет", "adult:no")),
     )
@@ -72,6 +74,7 @@ def build_router(
     store: Store,
     cities: CityCatalog,
     delivery: DeliveryWorker,
+    avatars: AvatarAssets,
 ) -> Router:
     router = Router(name="money-profile")
 
@@ -183,7 +186,10 @@ def build_router(
             await state.update_data(birth_time=None)
             await state.set_state(ProfileForm.city)
             if callback.message:
-                await callback.message.answer("Введите город и страну рождения.")
+                await callback.message.answer(
+                    "Введите только город рождения, например: Москва. Страну писать не нужно — "
+                    "если найдётся несколько городов, я покажу варианты с регионом и страной."
+                )
         else:
             await state.set_state(ProfileForm.birth_time)
             if callback.message:
@@ -203,15 +209,22 @@ def build_router(
             return
         await state.update_data(birth_time=value.isoformat())
         await state.set_state(ProfileForm.city)
-        await message.answer("Введите город и страну рождения.")
+        await message.answer(
+            "Введите только город рождения, например: Москва. Страну писать не нужно — "
+            "если найдётся несколько городов, я покажу варианты с регионом и страной."
+        )
 
     @router.message(ProfileForm.city)
     async def city(message: Message, state: FSMContext) -> None:
         query = (message.text or "").strip()
+        if len(query) > 120:
+            await message.answer("Название города слишком длинное. Введите только город.")
+            return
         variants = await cities.search(query)
         if not variants:
             await message.answer(
-                f"Город не найден. Укажите ближайший крупный город или напишите @{settings.support_username}."
+                "Не получилось найти город. Введите только его название без страны, например: "
+                f"Москва. Можно указать ближайший крупный город или написать @{settings.support_username}."
             )
             return
         await state.update_data(city_options=[asdict(item) for item in variants])
@@ -283,6 +296,8 @@ def build_router(
             issues = validate_generated_profile(result)
             if issues:
                 raise RuntimeError("generated content failed validation: " + "; ".join(issues))
+            avatar_image = avatars.free_image(result.money_type)
+            offer_image = avatars.offer_image(result.money_type)
             profile_id = await store.save_calculation(callback.from_user.id, birth, facts, result)
         except Exception:
             await callback.message.answer(
@@ -293,22 +308,22 @@ def build_router(
         await store.record_event(callback.from_user.id, "profile_calculated")
         if facts.warning:
             await callback.message.answer(f"Важно: {facts.warning}")
-        await callback.message.answer(result.free_insight)
+        await callback.message.answer_photo(
+            FSInputFile(avatar_image),
+            caption=result.free_insight,
+        )
         await store.record_event(callback.from_user.id, "offer_viewed")
         description = (
-            "Полный разбор состоит из шести сообщений и персональной карточки: денежный тип, "
-            "сильная сторона, формат работы, стиль продаж, одна ловушка и эксперимент на семь дней. "
+            "Сила твоего аватара\n\n"
+            "Узнай, в чём его сила, что мешает тебе раскрывать потенциал и через что "
+            "тебе легче приходить к доходу"
         )
-        if settings.payment_mode is PaymentMode.FAKE:
-            description += (
-                f"В рабочей версии стоимость составит {_price(settings)}. "
-                "Сейчас действует бесплатный тест без списания денег и без чека."
-            )
-            button = ("Получить бесплатно (тест)", f"buy:{profile_id}")
-        else:
-            description += f"Стоимость — {_price(settings)}."
-            button = (f"Получить за {_price(settings)}", f"buy:{profile_id}")
-        await callback.message.answer(description, reply_markup=_keyboard(button))
+        button = (f"Раскрыть силу — {_price(settings)}", f"buy:{profile_id}")
+        await callback.message.answer_photo(
+            FSInputFile(offer_image),
+            caption=description,
+            reply_markup=_keyboard(button),
+        )
 
     @router.callback_query(F.data.startswith("buy:"))
     async def buy(callback: CallbackQuery, state: FSMContext) -> None:
@@ -408,10 +423,10 @@ def build_router(
             return
         access = await store.profile_access(message.from_user.id)
         if not access:
-            await message.answer("Профиль ещё не рассчитан. Начните с /start.")
+            await message.answer("Денежный аватар ещё не рассчитан. Начните с /start.")
             return
         if access.order_status == OrderStatus.DELIVERED and access.order_id:
-            await message.answer("Повторно отправляю сохранённый профиль.")
+            await message.answer("Повторно отправляю сохранённый PDF.")
             await delivery.send_copy(access.order_id)
         elif access.order_status == OrderStatus.PAID and access.order_id:
             delivery.notify()
@@ -430,10 +445,16 @@ def build_router(
                 ),
             )
         else:
-            await message.answer(
-                "Бесплатный результат готов. Можно перейти к полному разбору.",
+            _, result = await store.get_profile_result(access.profile_id)
+            await message.answer_photo(
+                FSInputFile(avatars.offer_image(result.money_type)),
+                caption=(
+                    "Сила твоего аватара\n\n"
+                    "Узнай, в чём его сила, что мешает тебе раскрывать потенциал и через что "
+                    "тебе легче приходить к доходу"
+                ),
                 reply_markup=_keyboard(
-                    (f"Получить за {_price(settings)}", f"buy:{access.profile_id}")
+                    (f"Раскрыть силу — {_price(settings)}", f"buy:{access.profile_id}")
                 ),
             )
 
@@ -469,7 +490,7 @@ def build_router(
     async def delete_my_data(message: Message, state: FSMContext) -> None:
         await state.set_state(DeleteForm.confirm)
         await message.answer(
-            "Удалить имя, данные рождения, результат, карточку и отзыв? Обезличенные события и "
+            "Удалить имя, данные рождения, результат, PDF и отзыв? Обезличенные события и "
             "минимальный платёжный журнал сохранятся на срок из политики.",
             reply_markup=_keyboard(("Удалить мои данные", "delete:yes"), ("Отмена", "delete:no")),
         )
@@ -488,7 +509,7 @@ def build_router(
         await callback.answer("Данные удалены", show_alert=True)
         if callback.message:
             await callback.message.answer(
-                "Персональные данные удалены. Новый профиль можно начать с /start."
+                "Персональные данные удалены. Новый расчёт можно начать с /start."
             )
 
     @router.message(Command("stats"))
@@ -577,7 +598,7 @@ async def set_commands(bot: Any) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Начать расчёт"),
-            BotCommand(command="profile", description="Получить сохранённый профиль"),
+            BotCommand(command="profile", description="Получить сохранённый результат"),
             BotCommand(command="support", description="Поддержка"),
             BotCommand(command="paysupport", description="Вопросы по оплате"),
             BotCommand(command="terms", description="Условия"),

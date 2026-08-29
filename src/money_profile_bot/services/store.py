@@ -431,7 +431,7 @@ class Store:
                 .where(DeliveryItem.order_id == order.id)
             )
             if not existing_count:
-                kinds = [*(f"message:{index}" for index in range(6)), "card", "feedback"]
+                kinds = ["pdf", "feedback"]
                 session.add_all(
                     [
                         DeliveryItem(order_id=order.id, sequence=index, kind=kind)

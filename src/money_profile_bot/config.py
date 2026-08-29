@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./runtime/money_profile.sqlite3"
     geonames_database_path: Path = Path("data/cities.sqlite3")
     card_output_directory: Path = Path("runtime/cards")
+    avatar_asset_directory: Path = Path("assets/avatars")
+    pdf_output_directory: Path = Path("runtime/pdfs")
 
     public_base_url: str = "https://money.natarazlozhi.ru"
     source_repository_url: str = "https://github.com/doubletriplee/natarazlozhi_money_profile_bot"
@@ -197,3 +199,4 @@ def ensure_runtime_directories(settings: Settings) -> None:
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     settings.geonames_database_path.parent.mkdir(parents=True, exist_ok=True)
     settings.card_output_directory.mkdir(parents=True, exist_ok=True)
+    settings.pdf_output_directory.mkdir(parents=True, exist_ok=True)

@@ -20,15 +20,18 @@ dependencies = [
   "pydantic-settings>=2.6,<3",
   "pyswisseph==2.10.3.2",
   "python-dateutil>=2.9,<3",
+  "reportlab>=4.2,<5",
   "SQLAlchemy>=2.0,<3",
 ]
 
 [project.optional-dependencies]
 dev = [
   "mypy>=1.13,<2",
+  "pypdf>=5,<7",
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<2",
   "ruff>=0.8,<1",
+  "types-reportlab>=4.2,<5",
 ]
 
 [project.scripts]

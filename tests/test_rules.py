@@ -78,8 +78,8 @@ def test_venus_transition_returns_two_styles() -> None:
         venus_possible_signs=("Овен", "Телец"),
     )
     profile = generate_profile(facts)
-    assert "Инициатор" in profile.money_type
-    assert "Создатель ценности" in profile.money_type
+    assert "Вдохновительница" in profile.money_type
+    assert "Мастерица" in profile.money_type
     assert "style.venus_transition" in profile.triggered_rule_ids
 
 

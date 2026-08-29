@@ -9,19 +9,21 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
+from money_profile_bot.domain import GeneratedProfile
 from money_profile_bot.models import DeliveryStatus
-from money_profile_bot.services.card import CardRenderer
+from money_profile_bot.services.avatar import display_avatar_name
+from money_profile_bot.services.pdf import PdfRenderer
 from money_profile_bot.services.store import Store
 
 logger = logging.getLogger(__name__)
 
 
 class DeliveryWorker:
-    def __init__(self, bot: Bot, store: Store, renderer: CardRenderer, cards_dir: Path) -> None:
+    def __init__(self, bot: Bot, store: Store, renderer: PdfRenderer, pdfs_dir: Path) -> None:
         self.bot = bot
         self.store = store
         self.renderer = renderer
-        self.cards_dir = cards_dir
+        self.pdfs_dir = pdfs_dir
         self._wake = asyncio.Event()
         self._stopping = False
 
@@ -46,28 +48,38 @@ class DeliveryWorker:
         except Exception:
             logger.exception("delivery context failed", extra={"order_id": order_id})
             return
+        has_pdf_item = any(item.kind == "pdf" for item in items)
+        legacy_pdf_sent = False
         for item in items:
             if item.status == DeliveryStatus.SENT:
                 continue
             try:
-                if item.kind.startswith("message:"):
-                    index = int(item.kind.split(":", 1)[1])
-                    sent = await self.bot.send_message(telegram_id, result.messages[index])
-                elif item.kind == "card":
-                    card_path = self.cards_dir / f"{order.profile_id}.png"
-                    if not card_path.exists():
-                        self.renderer.render(
-                            name=birth.name,
-                            money_type=result.money_type,
-                            strength=result.strength,
-                            destination=card_path,
-                        )
-                        await self.store.save_card_path(order.profile_id, str(card_path))
-                    sent = await self.bot.send_photo(
+                if item.kind == "pdf":
+                    pdf_path = await self._ensure_pdf(order.profile_id, birth.name, result)
+                    sent = await self.bot.send_document(
                         telegram_id,
-                        FSInputFile(card_path),
+                        FSInputFile(
+                            pdf_path,
+                            filename=(
+                                f"Денежный_потенциал_{display_avatar_name(result.money_type)}.pdf"
+                            ),
+                        ),
                         caption=result.disclaimer,
                     )
+                elif item.kind.startswith("message:") or item.kind == "card":
+                    # Очереди ранней тестовой версии могли содержать шесть сообщений и
+                    # карточку. При первом оставшемся элементе заменяем их единым PDF.
+                    if not has_pdf_item and not legacy_pdf_sent:
+                        pdf_path = await self._ensure_pdf(order.profile_id, birth.name, result)
+                        sent = await self.bot.send_document(
+                            telegram_id,
+                            FSInputFile(pdf_path, filename="Денежный_потенциал.pdf"),
+                            caption=result.disclaimer,
+                        )
+                        legacy_pdf_sent = True
+                    else:
+                        await self.store.mark_delivery_item(item.id, status=DeliveryStatus.SENT)
+                        continue
                 elif item.kind == "feedback":
                     keyboard = InlineKeyboardMarkup(
                         inline_keyboard=[
@@ -83,12 +95,12 @@ class DeliveryWorker:
                     sent = await self.bot.send_message(
                         telegram_id,
                         "Насколько разбор оказался полезным? Выберите оценку от 1 до 5. "
-                        "Карточку и сообщения можно переслать обычной кнопкой Telegram.",
+                        "PDF можно переслать обычной кнопкой Telegram.",
                         reply_markup=keyboard,
                     )
                 else:
                     raise ValueError("unknown delivery item kind")
-            except (TelegramAPIError, OSError, ValueError) as exc:
+            except (TelegramAPIError, OSError, RuntimeError, ValueError) as exc:
                 logger.warning(
                     "delivery item failed",
                     extra={"order_id": order_id, "kind": item.kind, "error": type(exc).__name__},
@@ -104,15 +116,24 @@ class DeliveryWorker:
 
     async def send_copy(self, order_id: str) -> None:
         order, telegram_id, birth, result, _ = await self.store.delivery_context(order_id)
-        for message in result.messages:
-            await self.bot.send_message(telegram_id, message)
-        card_path = self.cards_dir / f"{order.profile_id}.png"
-        if not card_path.exists():
-            self.renderer.render(
-                name=birth.name,
-                money_type=result.money_type,
-                strength=result.strength,
-                destination=card_path,
+        pdf_path = await self._ensure_pdf(order.profile_id, birth.name, result)
+        await self.bot.send_document(
+            telegram_id,
+            FSInputFile(
+                pdf_path,
+                filename=f"Денежный_потенциал_{display_avatar_name(result.money_type)}.pdf",
+            ),
+            caption=result.disclaimer,
+        )
+
+    async def _ensure_pdf(self, profile_id: str, name: str, result: GeneratedProfile) -> Path:
+        pdf_path = self.pdfs_dir / f"{profile_id}.pdf"
+        if not pdf_path.exists():
+            await asyncio.to_thread(
+                self.renderer.render,
+                name=name,
+                result=result,
+                destination=pdf_path,
             )
-            await self.store.save_card_path(order.profile_id, str(card_path))
-        await self.bot.send_photo(telegram_id, FSInputFile(card_path), caption=result.disclaimer)
+        await self.store.save_card_path(profile_id, str(pdf_path))
+        return pdf_path
