@@ -32,6 +32,7 @@ async def maintenance(store: Store, settings: Settings) -> None:
         try:
             now = datetime.now(UTC)
             draft_cutoff = now - timedelta(days=settings.profile_draft_retention_days)
+            await store.cleanup_expired_form_data(draft_cutoff)
             await store.cleanup_expired_drafts(draft_cutoff)
             if settings.payment_retention_days > 0:
                 payment_cutoff = now - timedelta(days=settings.payment_retention_days)

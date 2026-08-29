@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from aiogram.types import Chat, Message, User
 
 from money_profile_bot.bot.router import (
     _accept_consent,
@@ -18,6 +19,7 @@ from money_profile_bot.bot.router import (
     _sales_keyboard,
     _send_free_avatar,
     build_router,
+    TestAccessMiddleware,
 )
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
 from money_profile_bot.config import Settings
@@ -139,6 +141,28 @@ def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
     buttons = _reminder_buttons(_intro_keyboard(Settings(_env_file=None)))
 
     assert buttons == ((("Согласна, продолжить", "consent:yes"),),)
+
+
+@pytest.mark.asyncio
+async def test_closed_test_middleware_blocks_non_member_but_keeps_legal_commands() -> None:
+    middleware = TestAccessMiddleware(frozenset({10001}))
+    handler = AsyncMock(return_value="allowed")
+    user = User(id=20002, is_bot=False, first_name="Test")
+    start = Message(
+        message_id=1,
+        date=datetime.now(UTC),
+        chat=Chat(id=20002, type="private"),
+        from_user=user,
+        text="/start",
+    )
+    privacy = start.model_copy(update={"message_id": 2, "text": "/privacy"})
+
+    with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
+        assert await middleware(handler, start, {}) is None
+        answer.assert_awaited_once_with("Тестовый бот доступен только участникам закрытого теста.")
+
+    assert await middleware(handler, privacy, {}) == "allowed"
+    handler.assert_awaited_once_with(privacy, {})
 
 
 @pytest.mark.asyncio

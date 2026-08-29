@@ -99,6 +99,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_safety(self) -> Settings:
+        if self.app_env is Environment.TEST:
+            invalid: list[str] = []
+            if self.payment_mode is not PaymentMode.FAKE:
+                invalid.append("PAYMENT_MODE=fake")
+            if not self.test_access_ids:
+                invalid.append("TEST_ACCESS_TELEGRAM_IDS")
+            if invalid:
+                raise ValueError("test configuration is incomplete: " + ", ".join(invalid))
+
         if self.app_env is not Environment.PRODUCTION:
             self.app_encryption_key = self.app_encryption_key or _development_key("data")
             self.lookup_hmac_key = self.lookup_hmac_key or _development_key("lookup")

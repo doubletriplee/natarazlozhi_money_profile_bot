@@ -65,3 +65,24 @@ def test_production_rejects_fake_payment_mode() -> None:
             payment_mode=PaymentMode.FAKE,
             _env_file=None,
         )
+
+
+def test_closed_test_requires_fake_payment_and_access_list() -> None:
+    with pytest.raises(ValidationError, match="TEST_ACCESS_TELEGRAM_IDS"):
+        Settings(app_env=Environment.TEST, _env_file=None)
+
+    with pytest.raises(ValidationError, match="PAYMENT_MODE=fake"):
+        Settings(
+            app_env=Environment.TEST,
+            payment_mode=PaymentMode.ROBOKASSA,
+            test_access_telegram_ids="10001",
+            _env_file=None,
+        )
+
+    settings = Settings(
+        app_env=Environment.TEST,
+        payment_mode=PaymentMode.FAKE,
+        test_access_telegram_ids="10001,20002",
+        _env_file=None,
+    )
+    assert settings.test_access_ids == frozenset({10001, 20002})

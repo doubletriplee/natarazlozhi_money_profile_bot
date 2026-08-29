@@ -25,6 +25,7 @@ from money_profile_bot.models import (
     DeliveryItem,
     DeliveryStatus,
     FormReminder,
+    FsmRecord,
     Order,
     OrderStatus,
     Payment,
@@ -522,6 +523,30 @@ async def test_existing_incomplete_form_is_backfilled_only_once(
     context = await service.form_reminder_context(reminder.id)
     assert context is not None
     assert context.text == CITY_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_expired_encrypted_form_state_and_reminder_are_deleted(
+    store: tuple[Store, Database],
+) -> None:
+    service, database = store
+    await service.ensure_user(10001)
+    storage = EncryptedDatabaseStorage(database.sessions, service.crypto)
+    key = StorageKey(bot_id=1, chat_id=10001, user_id=10001)
+    await storage.set_state(key, ProfileForm.city)
+    await storage.set_data(key, {"birth_date": "01.01.2000", "city": "Москва"})
+    await service.schedule_form_reminder(10001, state="city", text=CITY_PROMPT)
+    old = datetime.now(UTC) - timedelta(days=31)
+    async with database.sessions() as session, session.begin():
+        await session.execute(update(FsmRecord).values(updated_at=old))
+        await session.execute(update(FormReminder).values(created_at=old))
+
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    assert await service.cleanup_expired_form_data(cutoff) == 2
+    assert await service.cleanup_expired_form_data(cutoff) == 0
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(FsmRecord)) == 0
+        assert await session.scalar(select(func.count()).select_from(FormReminder)) == 0
 
 
 @pytest.mark.asyncio

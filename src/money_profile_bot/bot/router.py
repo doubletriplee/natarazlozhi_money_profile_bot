@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import html
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
-from aiogram import F, Router
+from aiogram import BaseMiddleware, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -18,6 +19,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    TelegramObject,
 )
 
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
@@ -48,6 +50,35 @@ CITY_PROMPT = (
     "Введи только город рождения, например: Москва. Страну писать не нужно — "
     "если найдётся несколько городов, я покажу варианты с регионом и страной."
 )
+PUBLIC_TEST_COMMANDS = frozenset(
+    {"/privacy", "/terms", "/consent", "/support", "/paysupport", "/delete_my_data"}
+)
+
+
+class TestAccessMiddleware(BaseMiddleware):
+    def __init__(self, allowed_ids: frozenset[int]) -> None:
+        self.allowed_ids = allowed_ids
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = getattr(event, "from_user", None)
+        if not self.allowed_ids or (user and user.id in self.allowed_ids):
+            return await handler(event, data)
+        if isinstance(event, Message):
+            command = (event.text or "").split(maxsplit=1)[0].split("@", 1)[0].casefold()
+            if command in PUBLIC_TEST_COMMANDS:
+                return await handler(event, data)
+            await event.answer("Тестовый бот доступен только участникам закрытого теста.")
+        elif isinstance(event, CallbackQuery):
+            await event.answer(
+                "Тестовый бот доступен только участникам закрытого теста.",
+                show_alert=True,
+            )
+        return None
 
 
 def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
@@ -286,13 +317,13 @@ def build_router(
     delivery: DeliveryWorker,
 ) -> Router:
     router = Router(name="money-profile")
+    access_middleware = TestAccessMiddleware(settings.test_access_ids)
+    router.message.outer_middleware(access_middleware)
+    router.callback_query.outer_middleware(access_middleware)
 
     @router.message(CommandStart())
     async def start(message: Message, state: FSMContext, command: CommandObject) -> None:
         if not message.from_user:
-            return
-        if settings.test_access_ids and message.from_user.id not in settings.test_access_ids:
-            await message.answer("Тестовый бот доступен только участникам закрытого теста.")
             return
         source = command.args if command.args and START_RE.fullmatch(command.args) else "direct"
         await store.ensure_user(message.from_user.id, source)

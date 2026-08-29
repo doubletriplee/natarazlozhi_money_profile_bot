@@ -1101,6 +1101,29 @@ class Store:
                 profile.deleted_at = utcnow()
             return len(profiles)
 
+    async def cleanup_expired_form_data(self, older_than: datetime) -> int:
+        """Delete stale encrypted questionnaire state and its reminder payloads."""
+        async with self.sessions() as session, session.begin():
+            record_ids = list(
+                (
+                    await session.scalars(
+                        select(FsmRecord.key_hash).where(FsmRecord.updated_at < older_than)
+                    )
+                ).all()
+            )
+            reminder_ids = list(
+                (
+                    await session.scalars(
+                        select(FormReminder.id).where(FormReminder.created_at < older_than)
+                    )
+                ).all()
+            )
+            if record_ids:
+                await session.execute(delete(FsmRecord).where(FsmRecord.key_hash.in_(record_ids)))
+            if reminder_ids:
+                await session.execute(delete(FormReminder).where(FormReminder.id.in_(reminder_ids)))
+            return len(record_ids) + len(reminder_ids)
+
     async def cleanup_expired_payment_data(self, older_than: datetime) -> int:
         """Remove an expired payment journal and scrub its order-side contact data."""
         async with self.sessions() as session, session.begin():
