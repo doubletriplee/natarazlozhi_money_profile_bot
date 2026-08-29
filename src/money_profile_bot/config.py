@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     test_access_telegram_ids: str = ""
     bootstrap_admin_on_first_start: bool = False
     product_price_rub: Decimal = Field(default=Decimal("149.00"), gt=0)
-    payment_mode: PaymentMode = PaymentMode.ROBOKASSA
+    payment_mode: PaymentMode = PaymentMode.FAKE
 
     robokassa_merchant_login: str = ""
     robokassa_password1: str = ""

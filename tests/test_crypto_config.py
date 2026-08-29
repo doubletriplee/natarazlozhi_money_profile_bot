@@ -37,6 +37,7 @@ def test_lookup_is_stable_but_context_specific() -> None:
 def test_development_settings_generate_keys() -> None:
     settings = Settings(_env_file=None)
     assert settings.product_price_minor == 14900
+    assert settings.payment_mode is PaymentMode.FAKE
     assert settings.app_encryption_key
     assert settings.lookup_hmac_key
 
