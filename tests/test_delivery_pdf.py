@@ -65,13 +65,16 @@ async def test_full_reading_offer_uses_exact_caption_and_prefilled_contact_link(
 
     await worker.deliver("order-1")
 
+    photo_args = bot.send_photo.await_args.args
+    assert photo_args[0] == 123456
+    assert Path(photo_args[1].path) == ASSET_DIRECTORY / "full_reading_offer.png"
     args = bot.send_message.await_args.args
     kwargs = bot.send_message.await_args.kwargs
     assert args == (123456, FULL_READING_CAPTION)
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Хочу денежный разбор"
     assert parse_qs(urlparse(button.url).query) == {"text": [SALES_MESSAGE_TEXT]}
-    bot.send_photo.assert_not_awaited()
+    bot.send_photo.assert_awaited_once()
 
 
 @pytest.mark.asyncio

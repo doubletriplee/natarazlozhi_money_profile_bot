@@ -84,6 +84,10 @@ class DeliveryWorker:
                         reply_markup=self._full_reading_trigger_keyboard(order.id),
                     )
                 elif item.kind == "full_reading_offer":
+                    await self.bot.send_photo(
+                        telegram_id,
+                        FSInputFile(self.avatars.full_reading_offer_image()),
+                    )
                     sent = await self.bot.send_message(
                         telegram_id,
                         FULL_READING_CAPTION,
