@@ -99,7 +99,7 @@ async def test_strength_offer_is_sent_with_payment_button() -> None:
     kwargs = bot.send_photo.await_args.kwargs
     assert kwargs["caption"] == STRENGTH_OFFER_CAPTION
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "Раскрыть силу - 149₽"
+    assert button.text == "Раскрыть силу — 149₽ · тест"
     assert button.callback_data == "buy:profile-1"
     store.mark_strength_offer_sent.assert_awaited_once_with("offer-1", 42)
 

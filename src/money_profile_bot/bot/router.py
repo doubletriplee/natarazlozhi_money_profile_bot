@@ -631,7 +631,7 @@ def build_router(
         )
         await state.clear()
         await store.cancel_form_reminder(callback.from_user.id)
-        await callback.answer("Оплата подтверждена")
+        await callback.answer("Тестовый разбор открыт — деньги не списаны")
         delivery.notify()
 
     @router.callback_query(F.data.startswith("full:"))

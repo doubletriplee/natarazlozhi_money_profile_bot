@@ -122,7 +122,8 @@ def test_sales_link_prefills_exact_message() -> None:
 
 def test_strength_offer_has_practical_transition_paragraph() -> None:
     assert "Твой денежный шаг уже сегодня\n\nХочешь понять" in STRENGTH_OFFER_CAPTION
-    assert STRENGTH_OFFER_CAPTION.endswith("тебя к деньгам уже сейчас.")
+    assert "<b>Закрытый тест:</b>" in STRENGTH_OFFER_CAPTION
+    assert STRENGTH_OFFER_CAPTION.endswith("открывает разбор без списания денег.")
     assert len(STRENGTH_OFFER_CAPTION) <= 1024
 
 

@@ -205,7 +205,7 @@ class DeliveryWorker:
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"Раскрыть силу - {self.product_price_rub:.0f}₽",
+                        text=f"Раскрыть силу — {self.product_price_rub:.0f}₽ · тест",
                         callback_data=f"buy:{profile_id}",
                     )
                 ]
