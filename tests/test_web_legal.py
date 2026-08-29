@@ -29,16 +29,23 @@ async def test_fake_mode_legal_pages_disclose_that_no_purchase_occurs() -> None:
     async with TestClient(TestServer(app)) as client:
         privacy_response = await client.get("/privacy")
         terms_response = await client.get("/terms")
+        consent_response = await client.get("/consent")
         privacy = await privacy_response.text()
         terms = await terms_response.text()
+        consent = await consent_response.text()
 
-    assert "списание денег не производится" in privacy
+    assert privacy_response.status == 200
+    assert terms_response.status == 200
+    assert consent_response.status == 200
     assert "Симоненко Наталья Сергеевна" in privacy
     assert "026108860870" in privacy
     assert "natali.nata5689@mail.ru" in privacy
-    assert "Платёжный оператор в тестовом сценарии не используется" in privacy
-    assert "Тестовая запись об открытии результата удаляется через 30 дней" in privacy
-    assert "не сохраняет\nподтверждение совершеннолетия" in privacy
+    assert "Robokassa в закрытом тесте не получает данные" in privacy
+    assert "30 дней" in privacy
+    assert "Отдельного согласия на рекламу пользователь не даёт" in privacy
     assert "деньги не списываются" in terms
     assert "покупка и обязанность оплаты не возникают" in terms
-    assert "Публичная продажа через бота пока отключена" in terms
+    assert "Реальная продажа через бота отключена" in terms
+    assert "Согласна, продолжить" in consent
+    assert "Отдельное согласие на рекламную рассылку" in consent
+    assert "Подтверждение совершеннолетия не фиксируется" in consent

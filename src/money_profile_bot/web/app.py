@@ -10,6 +10,7 @@ from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.robokassa import RobokassaClient
 from money_profile_bot.services.store import Store
+from money_profile_bot.web.legal import consent_body, privacy_body, terms_body
 
 logger = logging.getLogger(__name__)
 
@@ -60,94 +61,22 @@ def create_web_app(
         raise web.HTTPFound(settings.source_url)
 
     async def privacy(_: web.Request) -> web.Response:
-        operator = html.escape(settings.operator_name or "[ФИО оператора необходимо заполнить]")
-        inn = html.escape(settings.operator_inn or "[ИНН необходимо заполнить]")
-        email = html.escape(settings.operator_email or "[email необходимо заполнить]")
-        if settings.payment_mode is PaymentMode.FAKE:
-            payment_data = (
-                "В закрытом тестовом режиме email для чека и платёжные данные не запрашиваются, "
-                "поскольку списание денег не производится."
-            )
-            providers = (
-                "Telegram используется как платформа общения, хостинг — для работы приложения. "
-                "Платёжный оператор в тестовом сценарии не используется."
-            )
-            payment_retention = (
-                "Тестовая запись об открытии результата удаляется через "
-                f"{settings.payment_retention_days or '[срок не утверждён]'} дней. После удаления "
-                "сохраняется только минимальный статус заказа, необходимый для повторного доступа "
-                "к уже выданному результату."
-            )
-        else:
-            payment_data = (
-                "Перед созданием платёжного счёта запрашивается email для электронного чека. "
-                "Банковские реквизиты обрабатывает платёжный оператор, бот их не получает."
-            )
-            providers = (
-                "Telegram используется как платформа общения, хостинг — для работы приложения, "
-                "Robokassa — для приёма платежа и формирования электронного чека."
-            )
-            payment_retention = (
-                "Техническая платёжная запись и контактные данные удаляются через "
-                f"{settings.payment_retention_days or '[срок не утверждён]'} дней. После удаления "
-                "сохраняются минимальные сведения о заказе и его статусе."
-            )
-        body = f"""
-<p class="meta">Версия документа: {html.escape(settings.legal_docs_version)}</p>
-<p>Оператор персональных данных: {operator}, самозанятый, ИНН {inn}, контакт: {email}.</p>
-<h2>Какие данные обрабатываются</h2><p>Числовой идентификатор Telegram, дата, время и место рождения,
-согласия, результат расчёта и технические события. {html.escape(payment_data)}</p>
-<h2>Цели и основания</h2><p>Данные нужны для выполнения расчёта, заключения и исполнения договора,
-приёма оплаты, выдачи результата, поддержки, безопасности и исполнения требований законодательства.
-Основания: согласие пользователя, исполнение договора и обязанности оператора.</p>
-<h2>Получатели</h2><p>{html.escape(providers)}</p>
-<h2>Хранение и защита</h2><p>Персональные поля шифруются. Неоплаченные анкеты удаляются через
-{settings.profile_draft_retention_days} дней. Резервные копии хранятся {settings.backup_retention_days} дней.
-{html.escape(payment_retention)}</p>
-<h2>Права пользователя</h2><p>Удалить исходные данные и результаты можно
-командой <code>/delete_my_data</code>. Вопросы направляются на {email} или
-<a href="https://t.me/{html.escape(settings.support_username)}">@{html.escape(settings.support_username)}</a>.</p>
-<h2>Возраст</h2><p>Сервис не устанавливает отдельное возрастное ограничение и не сохраняет
-подтверждение совершеннолетия без отдельного вопроса пользователю.</p>
-<p class="meta">Это проект документа. До запуска владелец или юрист должен проверить реквизиты,
-правовые основания, трансграничную передачу и сроки хранения.</p>"""
         return web.Response(
-            text=_page("Политика конфиденциальности", body), content_type="text/html"
+            text=_page("Политика обработки персональных данных", privacy_body(settings)),
+            content_type="text/html",
         )
 
     async def terms(_: web.Request) -> web.Response:
-        operator = html.escape(settings.operator_name or "[ФИО оператора необходимо заполнить]")
-        inn = html.escape(settings.operator_inn or "[ИНН необходимо заполнить]")
-        if settings.payment_mode is PaymentMode.FAKE:
-            payment_terms = """<h2>Закрытое тестирование</h2><p>Бот работает в тестовом режиме.
-Кнопка открытия расширенного описания имитирует подтверждение оплаты: деньги не списываются,
-покупка и обязанность оплаты не возникают. Публичная продажа через бота пока отключена.</p>"""
-            refund_terms = (
-                "<h2>Исправления и поддержка</h2><p>Так как деньги не списываются, возврат "
-                "в тестовом режиме не требуется. Если исходные данные были введены ошибочно "
-                "или возник вопрос по тестированию, "
-            )
-        else:
-            payment_terms = """<h2>Стоимость</h2><p>Краткое определение денежного аватара
-предоставляется бесплатно. Расширенное описание силы аватара стоит 149₽. Полный разбор
-денежной сферы предлагается отдельно за 990₽; условия заказа согласовываются в личном чате
-с исполнителем до оплаты.</p>"""
-            refund_terms = (
-                "<h2>Исправления и возвраты</h2><p>Если исходные данные были введены ошибочно "
-                "или возник вопрос по заказу, "
-            )
-        body = f"""
-<p class="meta">Версия документа: {html.escape(settings.legal_docs_version)}</p>
-<p>Исполнитель: {operator}, самозанятый, ИНН {inn}.</p>
-<h2>Предмет</h2><p>Сервис создаёт индивидуальную астрологическую интерпретацию «Денежный потенциал»
-по введённым пользователем данным. Денежный аватар с описанием выдаётся сообщением в Telegram.</p>
-{payment_terms}
-{refund_terms}Обратитесь к <a href="https://t.me/{html.escape(settings.support_username)}">@{html.escape(settings.support_username)}</a>
-и укажите код заказа.</p>
-<h2>Ограничение</h2><p>Разбор предназначен для развлечения и самонаблюдения. Он не является финансовой,
-инвестиционной, налоговой или юридической рекомендацией, не предсказывает доход и не гарантирует результат.</p>
-<p class="meta">Это проект оферты. До запуска документ и реквизиты должен проверить владелец или юрист.</p>"""
-        return web.Response(text=_page("Условия использования", body), content_type="text/html")
+        return web.Response(
+            text=_page("Условия использования", terms_body(settings)),
+            content_type="text/html",
+        )
+
+    async def consent(_: web.Request) -> web.Response:
+        return web.Response(
+            text=_page("Согласие на обработку персональных данных", consent_body(settings)),
+            content_type="text/html",
+        )
 
     async def payment_result(request: web.Request) -> web.Response:
         if settings.payment_mode is not PaymentMode.ROBOKASSA:
@@ -207,6 +136,7 @@ def create_web_app(
     app.router.add_get("/source", source)
     app.router.add_get("/privacy", privacy)
     app.router.add_get("/terms", terms)
+    app.router.add_get("/consent", consent)
     app.router.add_route("*", "/payments/robokassa/result", payment_result)
     app.router.add_post("/payments/robokassa/result2", payment_result2)
     app.router.add_route("*", "/payments/robokassa/success", payment_success)

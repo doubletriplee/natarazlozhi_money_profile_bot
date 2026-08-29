@@ -182,6 +182,12 @@ def _intro_keyboard(settings: Settings) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Условия", url=f"{settings.public_base_url}/terms"),
                 InlineKeyboardButton(text="Политика", url=f"{settings.public_base_url}/privacy"),
             ],
+            [
+                InlineKeyboardButton(
+                    text="Текст согласия",
+                    url=f"{settings.public_base_url}/consent",
+                )
+            ],
             [InlineKeyboardButton(text=CONSENT_BUTTON_TEXT, callback_data="consent:yes")],
         ]
     )
@@ -687,6 +693,10 @@ def build_router(
     async def privacy(message: Message) -> None:
         await message.answer(f"Политика конфиденциальности: {settings.public_base_url}/privacy")
 
+    @router.message(Command("consent"))
+    async def consent_text(message: Message) -> None:
+        await message.answer(f"Согласие на обработку данных: {settings.public_base_url}/consent")
+
     @router.callback_query(DeleteForm.confirm, F.data == "delete:no")
     async def delete_no(callback: CallbackQuery, state: FSMContext) -> None:
         await state.clear()
@@ -795,6 +805,7 @@ async def set_commands(bot: Any) -> None:
             BotCommand(command="paysupport", description="Вопросы по оплате"),
             BotCommand(command="terms", description="Условия"),
             BotCommand(command="privacy", description="Конфиденциальность"),
+            BotCommand(command="consent", description="Согласие на обработку данных"),
             BotCommand(command="delete_my_data", description="Удалить мои данные"),
         ]
     )

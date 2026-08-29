@@ -154,6 +154,8 @@ async def test_begin_sends_intro_photo_and_skips_age_gate() -> None:
     kwargs = message.answer_photo.await_args.kwargs
     assert kwargs["caption"] == INTRO_CAPTION
     buttons = kwargs["reply_markup"].inline_keyboard
+    assert buttons[1][0].text == "Текст согласия"
+    assert buttons[1][0].url == f"{settings.public_base_url}/consent"
     assert buttons[-1][0].text == "Согласна, продолжить"
     assert not hasattr(ProfileForm, "adult")
     assert not hasattr(ProfileForm, "email")
