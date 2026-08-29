@@ -34,7 +34,7 @@ from money_profile_bot.models import (
 )
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 
-FULL_READING_DELAY = timedelta(minutes=3)
+FULL_READING_DELAY = timedelta(minutes=1)
 
 
 def _order_code() -> str:
@@ -433,7 +433,7 @@ class Store:
                 .where(DeliveryItem.order_id == order.id)
             )
             if not existing_count:
-                kinds = ["pdf", "feedback", "full_reading_offer"]
+                kinds = ["avatar_result", "full_reading_offer"]
                 session.add_all(
                     [
                         DeliveryItem(
@@ -533,7 +533,7 @@ class Store:
             if status is DeliveryStatus.SENT:
                 sent_at = utcnow()
                 item.sent_at = sent_at
-                if item.kind == "pdf":
+                if item.kind == "avatar_result":
                     followup = await session.scalar(
                         select(DeliveryItem).where(
                             DeliveryItem.order_id == item.order_id,

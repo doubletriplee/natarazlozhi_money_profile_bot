@@ -11,7 +11,7 @@ from money_profile_bot.bot.router import (
     _begin,
     _birth_date_is_plausible,
     _sales_keyboard,
-    _send_avatar_and_offer,
+    _send_free_avatar_and_offer,
 )
 from money_profile_bot.bot.states import ProfileForm
 from money_profile_bot.config import Settings
@@ -20,7 +20,9 @@ from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
     INTRO_CAPTION,
     SALES_MESSAGE_TEXT,
+    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
+    avatar_paid_caption,
     sales_telegram_url,
 )
 
@@ -38,9 +40,9 @@ def test_intro_copy_and_image_are_complete() -> None:
     assets = AvatarAssets(ASSET_DIRECTORY)
     assert assets.first_message_image().is_file()
     assert INTRO_CAPTION.startswith("✨Узнай свой Денежный аватар")
-    assert INTRO_CAPTION.endswith(
-        "Заполни данные рождения — и бот определит твой Денежный аватар по натальной карте."
-    )
+    assert INTRO_CAPTION.endswith("А кто ты среди них?")
+    assert "Это мой авторский метод" in INTRO_CAPTION
+    assert "Денежный аватар — это мой" not in INTRO_CAPTION
     expected_avatars = (
         "✨ Муза",
         "🎙 Рассказчица",
@@ -61,9 +63,12 @@ def test_every_avatar_has_one_image_and_complete_caption() -> None:
     assert len(AVATAR_PRESENTATIONS) == 10
     for avatar_name, presentation in AVATAR_PRESENTATIONS.items():
         assert assets.free_image(avatar_name).is_file()
+        assert assets.offer_image(avatar_name).is_file()
         assert len(presentation.caption) <= 1024
         for heading in REQUIRED_HEADINGS:
             assert heading in presentation.caption
+            assert heading in avatar_paid_caption(avatar_name)
+        assert avatar_paid_caption(avatar_name).startswith(f"<b>{avatar_name}</b>\n\n")
 
 
 def test_sales_link_prefills_exact_message() -> None:
@@ -76,6 +81,7 @@ def test_sales_link_prefills_exact_message() -> None:
     assert "990₽" in FULL_READING_CAPTION
     assert "1 990 ₽" not in FULL_READING_CAPTION
     assert "990 ₽" not in FULL_READING_CAPTION
+    assert "<s>" not in FULL_READING_CAPTION
 
 
 def test_birth_date_validation_has_no_adult_age_gate() -> None:
@@ -106,16 +112,23 @@ async def test_begin_sends_intro_photo_and_skips_age_gate() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("avatar_name", AVATAR_PRESENTATIONS)
-async def test_all_avatar_results_are_photos_followed_by_sales_offer(
+async def test_all_free_avatar_results_are_followed_by_strength_offer(
     avatar_name: str,
 ) -> None:
     message = AsyncMock()
     settings = Settings(_env_file=None)
     assets = AvatarAssets(ASSET_DIRECTORY)
 
-    await _send_avatar_and_offer(
+    free_insight = (
+        f"<b>Ваш денежный аватар — {avatar_name}</b>\n\n"
+        "<b>Основной канал</b>\nТест.\n\n"
+        "<b>Сильная сторона</b>\nТест."
+    )
+    await _send_free_avatar_and_offer(
         message,
+        profile_id="profile-1",
         money_type=avatar_name,
+        free_insight=free_insight,
         settings=settings,
         avatars=assets,
         delay_seconds=0,
@@ -123,11 +136,11 @@ async def test_all_avatar_results_are_photos_followed_by_sales_offer(
 
     assert message.answer_photo.await_count == 2
     first, second = message.answer_photo.await_args_list
-    assert first.kwargs["caption"] == AVATAR_PRESENTATIONS[avatar_name].caption
-    assert second.kwargs["caption"] == FULL_READING_CAPTION
+    assert first.kwargs["caption"] == free_insight
+    assert second.kwargs["caption"] == STRENGTH_OFFER_CAPTION
     button = second.kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "Хочу денежный разбор"
-    assert parse_qs(urlparse(button.url).query) == {"text": [SALES_MESSAGE_TEXT]}
+    assert button.text == "Раскрыть силу - 149₽"
+    assert button.callback_data == "buy:profile-1"
     assert message.answer_document.await_count == 0
 
 

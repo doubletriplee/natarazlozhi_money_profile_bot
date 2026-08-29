@@ -211,7 +211,7 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
 
     if facts.mode == "profile" and facts.second_house_ruler_house:
         ruler_house = facts.second_house_ruler_house
-        money_type, channel, channel_after_through = HOUSE_TYPES[ruler_house]
+        money_type, channel, _ = HOUSE_TYPES[ruler_house]
         type_basis = (
             f"управитель II дома {facts.second_house_ruler} расположен в {ruler_house} доме"
         )
@@ -222,7 +222,7 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
             dict.fromkeys(element_for_sign(sign) for sign in facts.venus_possible_signs)
         )
         primary_element = possible_elements[0]
-        money_type, channel, channel_after_through = UNKNOWN_TYPES[primary_element]
+        money_type, channel, _ = UNKNOWN_TYPES[primary_element]
         type_basis = f"Венера находится в стихии «{primary_element}»"
         cusp_sign = venus.sign
         triggered.append(f"style.venus_element.{primary_element}")
@@ -332,13 +332,9 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
         ),
     )
     free_insight = (
-        f"<b>Твой денежный аватар — {money_type}</b>\n\n"
-        f"Тебе легче создавать ценность через {channel_after_through}. "
-        f"Твоя сильная сторона — {strength}.\n\n"
-        "Скорее всего, ты уже используешь эту силу — просто не всегда замечаешь, "
-        "как превратить её в понятный доход. Ниже покажу, что поможет её раскрыть "
-        "и что может незаметно тормозить твой рост.\n\n"
-        "<b>Узнать больше ↓</b>"
+        f"<b>Ваш денежный аватар — {money_type}</b>\n\n"
+        f"<b>Основной канал</b>\n{channel.capitalize()}.\n\n"
+        f"<b>Сильная сторона</b>\n{strength.capitalize()}."
     )
     return GeneratedProfile(
         title="Денежный потенциал" if facts.mode == "profile" else "Денежный стиль",

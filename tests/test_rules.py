@@ -41,13 +41,10 @@ def test_all_twelve_house_types_are_deterministic(house: int) -> None:
     assert profile.money_type == HOUSE_TYPES[house][0]
     assert len(profile.messages) == 6
     assert validate_generated_profile(profile) == []
-    assert "Это короткий ориентир по карте" not in profile.free_insight
-    assert profile.free_insight.startswith("<b>Твой денежный аватар —")
-    assert "через личная инициатива" not in profile.free_insight
-    if house == 1:
-        assert "через личную инициативу и самостоятельные решения" in profile.free_insight
-    assert "как превратить её в понятный доход" in profile.free_insight
-    assert profile.free_insight.endswith("<b>Узнать больше ↓</b>")
+    assert profile.free_insight.startswith("<b>Ваш денежный аватар —")
+    assert "<b>Основной канал</b>\n" in profile.free_insight
+    assert "<b>Сильная сторона</b>\n" in profile.free_insight
+    assert "Узнать больше" not in profile.free_insight
 
 
 @pytest.mark.parametrize("element", ELEMENTS)

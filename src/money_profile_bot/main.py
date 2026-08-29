@@ -18,6 +18,7 @@ from money_profile_bot.config import Settings, ensure_runtime_directories
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
 from money_profile_bot.services.avatar import AvatarAssets
+from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.geonames import CityCatalog
 from money_profile_bot.services.robokassa import RobokassaClient, RobokassaError
 from money_profile_bot.services.store import Store
@@ -52,6 +53,7 @@ async def serve() -> None:
 
     bot: Bot | None = None
     dispatcher: Dispatcher | None = None
+    delivery: DeliveryWorker | None = None
     tasks: list[asyncio.Task[object]] = []
     runner: web.AppRunner | None = None
 
@@ -67,6 +69,12 @@ async def serve() -> None:
                 session=AiohttpSession(proxy=settings.telegram_proxy_url or None),
             )
             avatars = AvatarAssets(settings.avatar_asset_directory)
+            delivery = DeliveryWorker(
+                bot,
+                store,
+                avatars,
+                sales_telegram_username=settings.support_username,
+            )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)
             dispatcher.include_router(
@@ -75,10 +83,11 @@ async def serve() -> None:
                     store,
                     CityCatalog(settings.geonames_database_path),
                     avatars,
+                    delivery,
                 )
             )
 
-        app = create_web_app(settings, store, robokassa, None)
+        app = create_web_app(settings, store, robokassa, delivery)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, settings.http_host, settings.http_port)
@@ -86,6 +95,8 @@ async def serve() -> None:
         logger.info("public service started on configured address")
 
         tasks.append(asyncio.create_task(maintenance(store, settings), name="maintenance-worker"))
+        if delivery:
+            tasks.append(asyncio.create_task(delivery.run(), name="delivery-worker"))
 
         try:
             if bot and dispatcher:
@@ -97,6 +108,8 @@ async def serve() -> None:
             else:
                 await asyncio.Event().wait()
         finally:
+            if delivery:
+                delivery.stop()
             for task in tasks:
                 task.cancel()
             for task in tasks:

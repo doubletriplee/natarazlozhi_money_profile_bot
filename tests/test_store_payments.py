@@ -102,7 +102,7 @@ async def test_successful_callback_locks_profile_and_builds_delivery_queue(
             select(func.count()).select_from(DeliveryItem).where(DeliveryItem.order_id == order_id)
         )
         payments = await session.scalar(select(func.count()).select_from(Payment))
-    assert count == 3
+    assert count == 2
     assert payments == 1
 
 
@@ -196,12 +196,12 @@ async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
                 .select_from(DeliveryItem)
                 .where(DeliveryItem.order_id == link.order_id)
             )
-            == 3
+            == 2
         )
 
 
 @pytest.mark.asyncio
-async def test_full_reading_offer_is_scheduled_three_minutes_after_pdf(
+async def test_full_reading_offer_is_scheduled_one_minute_after_avatar_result(
     store: tuple[Store, Database], birth: BirthData
 ) -> None:
     service, database = store
@@ -220,26 +220,27 @@ async def test_full_reading_offer_is_scheduled_three_minutes_after_pdf(
                 )
             ).all()
         )
-    pdf, feedback, followup = items
-    assert [item.kind for item in items] == ["pdf", "feedback", "full_reading_offer"]
+    avatar_result, followup = items
+    assert [item.kind for item in items] == ["avatar_result", "full_reading_offer"]
     assert followup.status == DeliveryStatus.SCHEDULED
     assert followup.available_at is None
 
-    await service.mark_delivery_item(pdf.id, status=DeliveryStatus.SENT, message_id=10)
-    await service.mark_delivery_item(feedback.id, status=DeliveryStatus.SENT, message_id=11)
+    await service.mark_delivery_item(avatar_result.id, status=DeliveryStatus.SENT, message_id=10)
     assert await service.complete_delivery_if_ready(order_id)
 
     async with database.sessions() as session:
         order = await session.get(Order, order_id)
-        sent_pdf = await session.get(DeliveryItem, pdf.id)
+        sent_avatar = await session.get(DeliveryItem, avatar_result.id)
         scheduled = await session.get(DeliveryItem, followup.id)
         assert order is not None and order.status == OrderStatus.DELIVERED
-        assert sent_pdf is not None and sent_pdf.sent_at is not None
+        assert sent_avatar is not None and sent_avatar.sent_at is not None
         assert scheduled is not None
         assert scheduled.status == DeliveryStatus.PENDING
         assert scheduled.available_at is not None
         assert scheduled.sent_at is None
-        delay = scheduled.available_at.replace(tzinfo=None) - sent_pdf.sent_at.replace(tzinfo=None)
+        delay = scheduled.available_at.replace(tzinfo=None) - sent_avatar.sent_at.replace(
+            tzinfo=None
+        )
         assert delay == FULL_READING_DELAY
 
     assert order_id not in await service.pending_order_ids()

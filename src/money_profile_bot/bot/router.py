@@ -21,16 +21,17 @@ from aiogram.types import (
 )
 
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
-from money_profile_bot.config import Settings
+from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.domain import BirthData, City, TimePrecision
+from money_profile_bot.models import OrderStatus
 from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.avatar import (
-    FULL_READING_CAPTION,
     INTRO_CAPTION,
+    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
-    avatar_caption,
     sales_telegram_url,
 )
+from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.geonames import CityCatalog
 from money_profile_bot.services.robokassa import RobokassaError
 from money_profile_bot.services.rules import generate_profile, validate_generated_profile
@@ -38,7 +39,7 @@ from money_profile_bot.services.store import Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 NAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё .'-]{0,58}[A-Za-zА-Яа-яЁё.]$")
-OFFER_DELAY_SECONDS = 5
+OFFER_DELAY_SECONDS = 15
 
 
 def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
@@ -105,24 +106,39 @@ async def _begin(
     )
 
 
-async def _send_avatar_and_offer(
+def _strength_offer_keyboard(profile_id: str, settings: Settings) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"Раскрыть силу - {settings.product_price_rub:.0f}₽",
+                    callback_data=f"buy:{profile_id}",
+                )
+            ]
+        ]
+    )
+
+
+async def _send_free_avatar_and_offer(
     message: Message,
     *,
+    profile_id: str,
     money_type: str,
+    free_insight: str,
     settings: Settings,
     avatars: AvatarAssets,
     delay_seconds: int = OFFER_DELAY_SECONDS,
 ) -> None:
     await message.answer_photo(
         FSInputFile(avatars.free_image(money_type)),
-        caption=avatar_caption(money_type),
+        caption=free_insight,
     )
     if delay_seconds:
         await asyncio.sleep(delay_seconds)
     await message.answer_photo(
-        FSInputFile(avatars.full_reading_offer_image()),
-        caption=FULL_READING_CAPTION,
-        reply_markup=_sales_keyboard(settings),
+        FSInputFile(avatars.offer_image(money_type)),
+        caption=STRENGTH_OFFER_CAPTION,
+        reply_markup=_strength_offer_keyboard(profile_id, settings),
     )
 
 
@@ -131,6 +147,7 @@ def build_router(
     store: Store,
     cities: CityCatalog,
     avatars: AvatarAssets,
+    delivery: DeliveryWorker,
 ) -> Router:
     router = Router(name="money-profile")
 
@@ -162,7 +179,7 @@ def build_router(
         await state.set_state(ProfileForm.name)
         await callback.answer()
         if callback.message:
-            await callback.message.answer("Как тебя называть? Введи имя.")
+            await callback.message.answer("Как тебя зовут?")
 
     @router.message(ProfileForm.name)
     async def name(message: Message, state: FSMContext) -> None:
@@ -323,7 +340,7 @@ def build_router(
             issues = validate_generated_profile(result)
             if issues:
                 raise RuntimeError("generated content failed validation: " + "; ".join(issues))
-            await store.save_calculation(callback.from_user.id, birth, facts, result)
+            profile_id = await store.save_calculation(callback.from_user.id, birth, facts, result)
         except Exception:
             await callback.message.answer(
                 f"Расчёт временно не завершён. Попробуй позже или напиши @{settings.support_username}."
@@ -331,15 +348,43 @@ def build_router(
             return
         await state.clear()
         await store.record_event(callback.from_user.id, "profile_calculated")
-        if facts.warning:
-            await callback.message.answer(f"Важно: {facts.warning}")
-        await _send_avatar_and_offer(
+        await _send_free_avatar_and_offer(
             callback.message,
+            profile_id=profile_id,
             money_type=result.money_type,
+            free_insight=result.free_insight,
             settings=settings,
             avatars=avatars,
         )
         await store.record_event(callback.from_user.id, "offer_viewed")
+
+    @router.callback_query(F.data.startswith("buy:"))
+    async def buy(callback: CallbackQuery, state: FSMContext) -> None:
+        profile_id = (callback.data or "").split(":", 1)[1]
+        access = await store.profile_access(callback.from_user.id)
+        if not access or access.profile_id != profile_id:
+            await callback.answer("Профиль не найден. Начни с /start.", show_alert=True)
+            return
+        if access.order_id and access.order_status in (OrderStatus.PAID, OrderStatus.DELIVERED):
+            await callback.answer("Результат уже доступен")
+            if access.order_status == OrderStatus.DELIVERED:
+                await delivery.send_copy(access.order_id)
+            else:
+                delivery.notify()
+            return
+        if settings.payment_mode is not PaymentMode.FAKE:
+            await callback.answer(
+                f"Оплата временно недоступна. Напиши @{settings.support_username}.",
+                show_alert=True,
+            )
+            return
+        await store.create_fake_paid_order(
+            telegram_id=callback.from_user.id,
+            profile_id=profile_id,
+        )
+        await state.clear()
+        await callback.answer("Оплата подтверждена")
+        delivery.notify()
 
     @router.message(Command("profile"))
     async def profile(message: Message) -> None:
@@ -349,13 +394,20 @@ def build_router(
         if not access:
             await message.answer("Денежный аватар ещё не рассчитан. Начни с /start.")
             return
+        if access.order_id and access.order_status in (OrderStatus.PAID, OrderStatus.DELIVERED):
+            if access.order_status == OrderStatus.DELIVERED:
+                await delivery.send_copy(access.order_id)
+            else:
+                delivery.notify()
+            return
         _, result = await store.get_profile_result(access.profile_id)
-        await _send_avatar_and_offer(
+        await _send_free_avatar_and_offer(
             message,
+            profile_id=access.profile_id,
             money_type=result.money_type,
+            free_insight=result.free_insight,
             settings=settings,
             avatars=avatars,
-            delay_seconds=0,
         )
         await store.record_event(message.from_user.id, "offer_viewed")
 
