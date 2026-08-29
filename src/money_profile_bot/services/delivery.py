@@ -17,6 +17,7 @@ from money_profile_bot.services.store import Store
 
 logger = logging.getLogger(__name__)
 
+
 class DeliveryWorker:
     def __init__(
         self,

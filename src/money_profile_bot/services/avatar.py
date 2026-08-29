@@ -46,8 +46,7 @@ FULL_READING_CAPTION = (
     "<b>Твоя цена после денежного аватара — 990₽</b>"
 )
 SALES_MESSAGE_TEXT = (
-    "Привет! Я из бота «Денежный потенциал» ✨ "
-    "Хочу заказать полный разбор денежной сферы."
+    "Привет! Я из бота «Денежный потенциал» ✨ Хочу заказать полный разбор денежной сферы."
 )
 
 
@@ -258,8 +257,7 @@ AVATAR_PRESENTATIONS = {
 }
 
 AVATAR_SLUGS = {
-    avatar_name: presentation.slug
-    for avatar_name, presentation in AVATAR_PRESENTATIONS.items()
+    avatar_name: presentation.slug for avatar_name, presentation in AVATAR_PRESENTATIONS.items()
 }
 
 # Старые значения могут встречаться в уже сохранённых результатах. Они остаются

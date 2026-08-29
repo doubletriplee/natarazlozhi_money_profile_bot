@@ -59,8 +59,8 @@ def _city_label(city: City) -> str:
 
 def _birth_date_is_plausible(value: date, *, today: date | None = None) -> bool:
     reference = today or date.today()
-    age = reference.year - value.year - (
-        (reference.month, reference.day) < (value.month, value.day)
+    age = (
+        reference.year - value.year - ((reference.month, reference.day) < (value.month, value.day))
     )
     return value <= reference and age <= 120
 
@@ -70,9 +70,7 @@ def _intro_keyboard(settings: Settings) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="Условия", url=f"{settings.public_base_url}/terms"),
-                InlineKeyboardButton(
-                    text="Политика", url=f"{settings.public_base_url}/privacy"
-                ),
+                InlineKeyboardButton(text="Политика", url=f"{settings.public_base_url}/privacy"),
             ],
             [InlineKeyboardButton(text="Узнать свой аватар", callback_data="consent:yes")],
         ]
