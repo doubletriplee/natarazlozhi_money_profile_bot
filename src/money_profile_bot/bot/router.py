@@ -435,7 +435,6 @@ def build_router(
             await message.answer("Денежный аватар ещё не рассчитан. Начните с /start.")
             return
         if access.order_status == OrderStatus.DELIVERED and access.order_id:
-            await message.answer("Повторно отправляю сохранённый PDF.")
             await delivery.send_copy(access.order_id)
         elif access.order_status == OrderStatus.PAID and access.order_id:
             delivery.notify()
