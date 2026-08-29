@@ -222,9 +222,7 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
         possible_signs = facts.venus_possible_signs or ((venus.sign,) if venus else ())
         if not possible_signs:
             raise ValueError("possible Venus signs are required for a style profile")
-        possible_elements = tuple(
-            dict.fromkeys(element_for_sign(sign) for sign in possible_signs)
-        )
+        possible_elements = tuple(dict.fromkeys(element_for_sign(sign) for sign in possible_signs))
         primary_element = possible_elements[0]
         money_type, channel, _ = UNKNOWN_TYPES[primary_element]
         type_basis = f"Венера находится в стихии «{primary_element}»"

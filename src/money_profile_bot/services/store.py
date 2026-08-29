@@ -1106,9 +1106,7 @@ class Store:
         async with self.sessions() as session, session.begin():
             payments = list(
                 (
-                    await session.scalars(
-                        select(Payment).where(Payment.received_at < older_than)
-                    )
+                    await session.scalars(select(Payment).where(Payment.received_at < older_than))
                 ).all()
             )
             if not payments:
