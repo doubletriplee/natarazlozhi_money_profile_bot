@@ -12,6 +12,8 @@ from money_profile_bot.bot.router import (
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
+    _intro_keyboard,
+    _reminder_buttons,
     _request_data_deletion,
     _sales_keyboard,
     _send_free_avatar,
@@ -26,7 +28,9 @@ from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
     INTRO_CAPTION,
     SALES_MESSAGE_TEXT,
+    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
+    avatar_free_caption,
     avatar_paid_caption,
     sales_telegram_url,
 )
@@ -108,7 +112,16 @@ def test_sales_link_prefills_exact_message() -> None:
     assert "990 ₽" not in FULL_READING_CAPTION
     assert "Обычная стоимость — <s>1 990₽</s>" in FULL_READING_CAPTION
     assert "<b>Твоя цена после Денежного аватара — 990₽</b>" in FULL_READING_CAPTION
+    assert FULL_READING_CAPTION.endswith("реализация и твой способ проявляться.")
+    assert "Сохрани эти подсказки — к ним стоит возвращаться 🤍" in FULL_READING_CAPTION
+    assert "<b>всю твою денежную картину</b>" in FULL_READING_CAPTION
     assert len(FULL_READING_CAPTION) <= 4096
+
+
+def test_strength_offer_has_practical_transition_paragraph() -> None:
+    assert "Твой денежный шаг уже сегодня\n\nХочешь понять" in STRENGTH_OFFER_CAPTION
+    assert STRENGTH_OFFER_CAPTION.endswith("тебя к деньгам уже сейчас.")
+    assert len(STRENGTH_OFFER_CAPTION) <= 1024
 
 
 def test_birth_date_validation_has_no_adult_age_gate() -> None:
@@ -117,6 +130,12 @@ def test_birth_date_validation_has_no_adult_age_gate() -> None:
     assert _birth_date_is_plausible(date(2026, 8, 29), today=today)
     assert not _birth_date_is_plausible(date(2026, 8, 30), today=today)
     assert not _birth_date_is_plausible(date(1900, 1, 1), today=today)
+
+
+def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
+    buttons = _reminder_buttons(_intro_keyboard(Settings(_env_file=None)))
+
+    assert buttons == ((("Узнать свой аватар", "consent:yes"),),)
 
 
 @pytest.mark.asyncio
@@ -148,6 +167,12 @@ async def test_consent_skips_name_and_requests_birth_date() -> None:
     await _accept_consent(callback, state, settings, store)
 
     store.save_consent.assert_awaited_once_with(123456, settings.legal_docs_version)
+    store.schedule_form_reminder.assert_awaited_once_with(
+        123456,
+        state="birth_date",
+        text="Введи дату рождения в формате ДД.ММ.ГГГГ.",
+        buttons=(),
+    )
     state.set_state.assert_awaited_once_with(ProfileForm.birth_date)
     callback.message.answer.assert_awaited_once_with("Введи дату рождения в формате ДД.ММ.ГГГГ.")
     assert all("Как тебя зовут?" not in str(call) for call in callback.mock_calls)
@@ -207,22 +232,18 @@ async def test_all_free_avatar_results_have_strength_trigger(
     message = AsyncMock()
     assets = AvatarAssets(ASSET_DIRECTORY)
 
-    free_insight = (
-        f"<b>Ваш денежный аватар — {avatar_name}</b>\n\n"
-        "<b>Основной канал</b>\nТест.\n\n"
-        "<b>Сильная сторона</b>\nТест."
-    )
     await _send_free_avatar(
         message,
         profile_id="profile-1",
         money_type=avatar_name,
-        free_insight=free_insight,
         avatars=assets,
     )
 
     message.answer_photo.assert_awaited_once()
     kwargs = message.answer_photo.await_args.kwargs
-    assert kwargs["caption"] == free_insight
+    assert kwargs["caption"] == avatar_free_caption(avatar_name)
+    assert "<b>Сильная сторона" not in kwargs["caption"]
+    assert "<b>А теперь самое интересное — сила твоего аватара.</b>" in kwargs["caption"]
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == "Узнать силу"
     assert button.callback_data == "strength:profile-1"

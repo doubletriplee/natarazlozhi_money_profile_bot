@@ -28,15 +28,23 @@ from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.avatar import (
     INTRO_CAPTION,
     AvatarAssets,
+    avatar_free_caption,
     sales_telegram_url,
 )
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.geonames import CityCatalog
 from money_profile_bot.services.robokassa import RobokassaError
 from money_profile_bot.services.rules import generate_profile, validate_generated_profile
-from money_profile_bot.services.store import Store
+from money_profile_bot.services.store import ReminderButtons, Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+CONSENT_REMINDER_PROMPT = "Нажми «Узнать свой аватар», чтобы продолжить."
+BIRTH_DATE_PROMPT = "Введи дату рождения в формате ДД.ММ.ГГГГ."
+TIME_PRECISION_PROMPT = "Насколько точно известно время рождения?"
+CITY_PROMPT = (
+    "Введи только город рождения, например: Москва. Страну писать не нужно — "
+    "если найдётся несколько городов, я покажу варианты с регионом и страной."
+)
 
 
 def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
@@ -47,12 +55,113 @@ def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
     )
 
 
+def _reminder_buttons(
+    reply_markup: InlineKeyboardMarkup | None,
+) -> tuple[tuple[tuple[str, str], ...], ...]:
+    if reply_markup is None:
+        return ()
+    rows = tuple(
+        tuple(
+            (button.text, button.callback_data)
+            for button in row
+            if button.callback_data is not None
+        )
+        for row in reply_markup.inline_keyboard
+    )
+    return tuple(row for row in rows if row)
+
+
+async def _schedule_form_reminder(
+    store: Store,
+    telegram_id: int,
+    *,
+    state: str,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    await store.schedule_form_reminder(
+        telegram_id,
+        state=state,
+        text=text,
+        buttons=_reminder_buttons(reply_markup),
+    )
+
+
 def _city_label(city: City) -> str:
     parts = [city.name]
     if city.region:
         parts.append(city.region)
     parts.append(city.country_name)
     return ", ".join(parts)
+
+
+def _confirmation_text(data: dict[str, Any], selected: dict[str, Any]) -> str:
+    precision_names = {
+        "exact": "точное",
+        "approximate": "примерное",
+        "unknown": "неизвестно",
+    }
+    time_text = (
+        time.fromisoformat(data["birth_time"]).strftime("%H:%M")
+        if data.get("birth_time")
+        else "не указано"
+    )
+    return (
+        "Проверь данные:\n\n"
+        f"Дата: {datetime.fromisoformat(data['birth_date']).strftime('%d.%m.%Y')}\n"
+        f"Время: {time_text} ({precision_names[data['time_precision']]})\n"
+        f"Место: {html.escape(_city_label(City(**selected)))}"
+    )
+
+
+def form_reminder_payload(state: str, data: dict[str, Any]) -> tuple[str, ReminderButtons] | None:
+    if state == ProfileForm.consent.state:
+        return (
+            CONSENT_REMINDER_PROMPT,
+            ((("Узнать свой аватар", "consent:yes"),),),
+        )
+    if state in {ProfileForm.name.state, ProfileForm.birth_date.state}:
+        return BIRTH_DATE_PROMPT, ()
+    if state == ProfileForm.time_precision.state:
+        return (
+            TIME_PRECISION_PROMPT,
+            (
+                (("Знаю точно", "precision:exact"),),
+                (("Знаю примерно", "precision:approximate"),),
+                (("Не знаю", "precision:unknown"),),
+            ),
+        )
+    if state == ProfileForm.birth_time.state:
+        warning = (
+            " В домах карты возможна неточность."
+            if data.get("time_precision") == TimePrecision.APPROXIMATE
+            else ""
+        )
+        return f"Введи время рождения в формате ЧЧ:ММ.{warning}", ()
+    if state == ProfileForm.city.state:
+        return CITY_PROMPT, ()
+    if state == ProfileForm.city_choice.state:
+        options = data.get("city_options")
+        if not isinstance(options, list):
+            return CITY_PROMPT, ()
+        rows = tuple(
+            ((_city_label(City(**option)), f"city:{index}"),)
+            for index, option in enumerate(options)
+            if isinstance(option, dict)
+        )
+        return ("Выбери подходящий вариант:", rows) if rows else (CITY_PROMPT, ())
+    if state == ProfileForm.confirm.state:
+        selected = data.get("city")
+        if not isinstance(selected, dict):
+            return None
+        return (
+            _confirmation_text(data, selected),
+            (
+                (("Всё верно", "form:confirm"),),
+                (("Заполнить заново", "form:restart"),),
+            ),
+        )
+    return None
 
 
 def _birth_date_is_plausible(value: date, *, today: date | None = None) -> bool:
@@ -121,12 +230,11 @@ async def _send_free_avatar(
     *,
     profile_id: str,
     money_type: str,
-    free_insight: str,
     avatars: AvatarAssets,
 ) -> None:
     await message.answer_photo(
         FSInputFile(avatars.free_image(money_type)),
-        caption=free_insight,
+        caption=avatar_free_caption(money_type),
         reply_markup=_strength_trigger_keyboard(profile_id),
     )
 
@@ -143,7 +251,13 @@ async def _accept_consent(
     await state.set_state(ProfileForm.birth_date)
     await callback.answer()
     if callback.message:
-        await callback.message.answer("Введи дату рождения в формате ДД.ММ.ГГГГ.")
+        await _schedule_form_reminder(
+            store,
+            callback.from_user.id,
+            state="birth_date",
+            text=BIRTH_DATE_PROMPT,
+        )
+        await callback.message.answer(BIRTH_DATE_PROMPT)
 
 
 async def _request_data_deletion(message: Message, state: FSMContext) -> None:
@@ -173,11 +287,19 @@ def build_router(
             return
         source = command.args if command.args and START_RE.fullmatch(command.args) else "direct"
         await store.ensure_user(message.from_user.id, source)
+        await store.cancel_form_reminder(message.from_user.id)
         newly_claimed_admin = False
         if settings.bootstrap_admin_on_first_start:
             claim = await store.claim_admin_if_unset(message.from_user.id)
             newly_claimed_admin = claim.newly_claimed
         await store.record_event(message.from_user.id, "bot_started")
+        await _schedule_form_reminder(
+            store,
+            message.from_user.id,
+            state="consent",
+            text=CONSENT_REMINDER_PROMPT,
+            reply_markup=_intro_keyboard(settings),
+        )
         await _begin(message, state, settings, avatars)
         if newly_claimed_admin:
             await message.answer(
@@ -188,6 +310,8 @@ def build_router(
     # иначе Telegram-команда может быть ошибочно прочитана как дата, время или город.
     @router.message(Command("delete_my_data"))
     async def delete_my_data(message: Message, state: FSMContext) -> None:
+        if message.from_user:
+            await store.cancel_form_reminder(message.from_user.id)
         await _request_data_deletion(message, state)
 
     @router.callback_query(ProfileForm.consent, F.data == "consent:yes")
@@ -199,35 +323,77 @@ def build_router(
     @router.message(ProfileForm.name)
     async def legacy_name(message: Message, state: FSMContext) -> None:
         await state.set_state(ProfileForm.birth_date)
-        await message.answer("Введи дату рождения в формате ДД.ММ.ГГГГ.")
+        if message.from_user:
+            await _schedule_form_reminder(
+                store,
+                message.from_user.id,
+                state="birth_date",
+                text=BIRTH_DATE_PROMPT,
+            )
+        await message.answer(BIRTH_DATE_PROMPT)
 
     @router.message(ProfileForm.birth_date)
     async def birth_date(message: Message, state: FSMContext) -> None:
         try:
             value = datetime.strptime((message.text or "").strip(), "%d.%m.%Y").date()
         except ValueError:
+            if message.from_user:
+                await _schedule_form_reminder(
+                    store,
+                    message.from_user.id,
+                    state="birth_date",
+                    text=BIRTH_DATE_PROMPT,
+                )
             await message.answer("Не удалось прочитать дату. Используй формат ДД.ММ.ГГГГ.")
             return
         if not _birth_date_is_plausible(value):
+            if message.from_user:
+                await _schedule_form_reminder(
+                    store,
+                    message.from_user.id,
+                    state="birth_date",
+                    text=BIRTH_DATE_PROMPT,
+                )
             await message.answer(
                 "Дата рождения не может быть в будущем. Проверь, правильно ли указан год."
             )
             return
         await state.update_data(birth_date=value.isoformat())
         await state.set_state(ProfileForm.time_precision)
+        keyboard = _keyboard(
+            ("Знаю точно", "precision:exact"),
+            ("Знаю примерно", "precision:approximate"),
+            ("Не знаю", "precision:unknown"),
+        )
+        if message.from_user:
+            await _schedule_form_reminder(
+                store,
+                message.from_user.id,
+                state="time_precision",
+                text=TIME_PRECISION_PROMPT,
+                reply_markup=keyboard,
+            )
         await message.answer(
-            "Насколько точно известно время рождения?",
-            reply_markup=_keyboard(
-                ("Знаю точно", "precision:exact"),
-                ("Знаю примерно", "precision:approximate"),
-                ("Не знаю", "precision:unknown"),
-            ),
+            TIME_PRECISION_PROMPT,
+            reply_markup=keyboard,
         )
 
     @router.callback_query(ProfileForm.time_precision, F.data.startswith("precision:"))
     async def precision(callback: CallbackQuery, state: FSMContext) -> None:
         value = (callback.data or "").split(":", 1)[1]
         if value not in {item.value for item in TimePrecision}:
+            keyboard = _keyboard(
+                ("Знаю точно", "precision:exact"),
+                ("Знаю примерно", "precision:approximate"),
+                ("Не знаю", "precision:unknown"),
+            )
+            await _schedule_form_reminder(
+                store,
+                callback.from_user.id,
+                state="time_precision",
+                text=TIME_PRECISION_PROMPT,
+                reply_markup=keyboard,
+            )
             await callback.answer("Неизвестный вариант", show_alert=True)
             return
         await state.update_data(time_precision=value)
@@ -236,10 +402,13 @@ def build_router(
             await state.update_data(birth_time=None)
             await state.set_state(ProfileForm.city)
             if callback.message:
-                await callback.message.answer(
-                    "Введи только город рождения, например: Москва. Страну писать не нужно — "
-                    "если найдётся несколько городов, я покажу варианты с регионом и страной."
+                await _schedule_form_reminder(
+                    store,
+                    callback.from_user.id,
+                    state="city",
+                    text=CITY_PROMPT,
                 )
+                await callback.message.answer(CITY_PROMPT)
         else:
             await state.set_state(ProfileForm.birth_time)
             if callback.message:
@@ -248,30 +417,62 @@ def build_router(
                     if value == TimePrecision.APPROXIMATE
                     else ""
                 )
-                await callback.message.answer(f"Введи время рождения в формате ЧЧ:ММ.{warning}")
+                prompt = f"Введи время рождения в формате ЧЧ:ММ.{warning}"
+                await _schedule_form_reminder(
+                    store,
+                    callback.from_user.id,
+                    state="birth_time",
+                    text=prompt,
+                )
+                await callback.message.answer(prompt)
 
     @router.message(ProfileForm.birth_time)
     async def birth_time(message: Message, state: FSMContext) -> None:
         try:
             value = datetime.strptime((message.text or "").strip(), "%H:%M").time()
         except ValueError:
+            if message.from_user:
+                await _schedule_form_reminder(
+                    store,
+                    message.from_user.id,
+                    state="birth_time",
+                    text="Введи время рождения в формате ЧЧ:ММ.",
+                )
             await message.answer("Не удалось прочитать время. Используй формат ЧЧ:ММ.")
             return
         await state.update_data(birth_time=value.isoformat())
         await state.set_state(ProfileForm.city)
-        await message.answer(
-            "Введи только город рождения, например: Москва. Страну писать не нужно — "
-            "если найдётся несколько городов, я покажу варианты с регионом и страной."
-        )
+        if message.from_user:
+            await _schedule_form_reminder(
+                store,
+                message.from_user.id,
+                state="city",
+                text=CITY_PROMPT,
+            )
+        await message.answer(CITY_PROMPT)
 
     @router.message(ProfileForm.city)
     async def city(message: Message, state: FSMContext) -> None:
         query = (message.text or "").strip()
         if len(query) > 120:
+            if message.from_user:
+                await _schedule_form_reminder(
+                    store,
+                    message.from_user.id,
+                    state="city",
+                    text=CITY_PROMPT,
+                )
             await message.answer("Название города слишком длинное. Введи только город.")
             return
         variants = await cities.search(query)
         if not variants:
+            if message.from_user:
+                await _schedule_form_reminder(
+                    store,
+                    message.from_user.id,
+                    state="city",
+                    text=CITY_PROMPT,
+                )
             await message.answer(
                 "Не получилось найти город. Введи только его название без страны, например: "
                 f"Москва. Можно указать ближайший крупный город или написать @{settings.support_username}."
@@ -285,6 +486,14 @@ def build_router(
                 for index, item in enumerate(variants)
             ]
         )
+        if message.from_user:
+            await _schedule_form_reminder(
+                store,
+                message.from_user.id,
+                state="city_choice",
+                text="Выбери подходящий вариант:",
+                reply_markup=keyboard,
+            )
         await message.answer("Выбери подходящий вариант:", reply_markup=keyboard)
 
     @router.callback_query(ProfileForm.city_choice, F.data.startswith("city:"))
@@ -296,39 +505,48 @@ def build_router(
         except (ValueError, IndexError, KeyError):
             await callback.answer("Вариант устарел. Введи город ещё раз.", show_alert=True)
             await state.set_state(ProfileForm.city)
+            await _schedule_form_reminder(
+                store,
+                callback.from_user.id,
+                state="city",
+                text=CITY_PROMPT,
+            )
+            if callback.message:
+                await callback.message.answer(CITY_PROMPT)
             return
         await state.update_data(city=selected)
         await state.set_state(ProfileForm.confirm)
         await callback.answer()
         data = await state.get_data()
-        precision_names = {
-            "exact": "точное",
-            "approximate": "примерное",
-            "unknown": "неизвестно",
-        }
-        time_text = (
-            time.fromisoformat(data["birth_time"]).strftime("%H:%M")
-            if data.get("birth_time")
-            else "не указано"
-        )
-        summary = (
-            "Проверь данные:\n\n"
-            f"Дата: {datetime.fromisoformat(data['birth_date']).strftime('%d.%m.%Y')}\n"
-            f"Время: {time_text} ({precision_names[data['time_precision']]})\n"
-            f"Место: {html.escape(_city_label(City(**selected)))}"
-        )
+        summary = _confirmation_text(data, selected)
         if callback.message:
+            keyboard = _keyboard(
+                ("Всё верно", "form:confirm"), ("Заполнить заново", "form:restart")
+            )
+            await _schedule_form_reminder(
+                store,
+                callback.from_user.id,
+                state="confirm",
+                text=summary,
+                reply_markup=keyboard,
+            )
             await callback.message.answer(
                 summary,
-                reply_markup=_keyboard(
-                    ("Всё верно", "form:confirm"), ("Заполнить заново", "form:restart")
-                ),
+                reply_markup=keyboard,
             )
 
     @router.callback_query(ProfileForm.confirm, F.data == "form:restart")
     async def form_restart(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
+        await store.cancel_form_reminder(callback.from_user.id)
         if isinstance(callback.message, Message):
+            await _schedule_form_reminder(
+                store,
+                callback.from_user.id,
+                state="consent",
+                text=CONSENT_REMINDER_PROMPT,
+                reply_markup=_intro_keyboard(settings),
+            )
             await _begin(callback.message, state, settings, avatars)
 
     @router.callback_query(ProfileForm.confirm, F.data == "form:confirm")
@@ -357,13 +575,13 @@ def build_router(
             )
             return
         await state.clear()
+        await store.cancel_form_reminder(callback.from_user.id)
         await store.record_event(callback.from_user.id, "profile_calculated")
         await store.schedule_strength_offer(profile_id)
         await _send_free_avatar(
             callback.message,
             profile_id=profile_id,
             money_type=result.money_type,
-            free_insight=result.free_insight,
             avatars=avatars,
         )
         delivery.notify()
@@ -409,6 +627,7 @@ def build_router(
             profile_id=profile_id,
         )
         await state.clear()
+        await store.cancel_form_reminder(callback.from_user.id)
         await callback.answer("Оплата подтверждена")
         delivery.notify()
 
@@ -445,7 +664,6 @@ def build_router(
             message,
             profile_id=access.profile_id,
             money_type=result.money_type,
-            free_insight=result.free_insight,
             avatars=avatars,
         )
         delivery.notify()

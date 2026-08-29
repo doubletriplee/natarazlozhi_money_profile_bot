@@ -12,7 +12,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiohttp import web
 
-from money_profile_bot.bot.router import build_router, set_commands
+from money_profile_bot.bot.router import build_router, form_reminder_payload, set_commands
 from money_profile_bot.bot.storage import EncryptedDatabaseStorage
 from money_profile_bot.config import Settings, ensure_runtime_directories
 from money_profile_bot.crypto import CryptoBox
@@ -76,6 +76,15 @@ async def serve() -> None:
                 sales_telegram_username=settings.support_username,
                 product_price_rub=settings.product_price_rub,
             )
+            backfilled_reminders = await store.backfill_form_reminders(
+                bot.id,
+                form_reminder_payload,
+            )
+            if backfilled_reminders:
+                logger.info(
+                    "backfilled form reminders",
+                    extra={"count": backfilled_reminders},
+                )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)
             dispatcher.include_router(

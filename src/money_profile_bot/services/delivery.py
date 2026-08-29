@@ -48,6 +48,8 @@ class DeliveryWorker:
 
     async def run(self) -> None:
         while not self._stopping:
+            for reminder_id in await self.store.pending_form_reminder_ids():
+                await self.deliver_form_reminder(reminder_id)
             for profile_id in await self.store.pending_strength_offer_profile_ids():
                 await self.deliver_strength_offer(profile_id)
             for order_id in await self.store.pending_order_ids():
@@ -114,6 +116,52 @@ class DeliveryWorker:
                 item.id, status=DeliveryStatus.SENT, message_id=sent.message_id
             )
         await self.store.complete_delivery_if_ready(order.id)
+
+    async def deliver_form_reminder(self, reminder_id: str) -> bool:
+        async with self._delivery_lock:
+            try:
+                context = await self.store.form_reminder_context(reminder_id)
+            except Exception:
+                logger.exception("form reminder context failed", extra={"reminder_id": reminder_id})
+                return False
+            if context is None:
+                return False
+            reply_markup = (
+                InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(text=text, callback_data=callback_data)
+                            for text, callback_data in row
+                        ]
+                        for row in context.buttons
+                    ]
+                )
+                if context.buttons
+                else None
+            )
+            try:
+                sent = await self.bot.send_message(
+                    context.telegram_id,
+                    context.text,
+                    reply_markup=reply_markup,
+                )
+            except (TelegramAPIError, OSError, RuntimeError, ValueError) as exc:
+                logger.warning(
+                    "form reminder delivery failed",
+                    extra={"reminder_id": reminder_id, "error": type(exc).__name__},
+                )
+                await self.store.mark_form_reminder_failed(
+                    reminder_id,
+                    type(exc).__name__,
+                    context.payload_token,
+                )
+                return False
+            await self.store.mark_form_reminder_sent(
+                reminder_id,
+                sent.message_id,
+                context.payload_token,
+            )
+            return True
 
     async def deliver_strength_offer(
         self,

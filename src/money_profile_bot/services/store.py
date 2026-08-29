@@ -4,6 +4,7 @@ import asyncio
 import json
 import secrets
 import string
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -23,6 +24,8 @@ from money_profile_bot.models import (
     DeliveryStatus,
     Event,
     Feedback,
+    FormReminder,
+    FsmRecord,
     Order,
     OrderStatus,
     Payment,
@@ -35,6 +38,7 @@ from money_profile_bot.models import (
 )
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 
+FORM_REMINDER_DELAY = timedelta(hours=1)
 STRENGTH_OFFER_DELAY = timedelta(hours=1)
 FULL_READING_DELAY = timedelta(hours=1)
 OFFER_RETRY_DELAY = timedelta(minutes=5)
@@ -89,6 +93,19 @@ class StrengthOfferContext:
     profile_id: str
     telegram_id: int
     money_type: str
+
+
+ReminderButtons = tuple[tuple[tuple[str, str], ...], ...]
+FormReminderPayloadBuilder = Callable[[str, dict[str, Any]], tuple[str, ReminderButtons] | None]
+
+
+@dataclass(frozen=True, slots=True)
+class FormReminderContext:
+    reminder_id: str
+    telegram_id: int
+    text: str
+    buttons: ReminderButtons
+    payload_token: str
 
 
 class Store:
@@ -222,6 +239,215 @@ class Store:
             result_data["messages"] = tuple(result_data["messages"])
             result_data["triggered_rule_ids"] = tuple(result_data["triggered_rule_ids"])
             return birth, GeneratedProfile(**result_data)
+
+    async def schedule_form_reminder(
+        self,
+        telegram_id: int,
+        *,
+        state: str,
+        text: str,
+        buttons: ReminderButtons = (),
+    ) -> None:
+        digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
+        async with self.sessions() as session, session.begin():
+            user = await session.scalar(select(User).where(User.telegram_id_hash == digest))
+            if not user:
+                raise LookupError("user not found")
+            reminder = await session.scalar(
+                select(FormReminder).where(FormReminder.user_id == user.id)
+            )
+            reminder_id = reminder.id if reminder else new_id()
+            scheduled_at = utcnow()
+            payload = {
+                "text": text,
+                "buttons": [
+                    [[button_text, callback_data] for button_text, callback_data in row]
+                    for row in buttons
+                ],
+            }
+            encrypted = self.crypto.encrypt_json(
+                payload, context=f"form_reminder.payload:{reminder_id}"
+            )
+            if reminder:
+                reminder.state = state
+                reminder.payload_encrypted = encrypted
+                reminder.status = DeliveryStatus.PENDING
+                reminder.telegram_message_id = None
+                reminder.attempts = 0
+                reminder.last_error_code = None
+                reminder.available_at = scheduled_at + FORM_REMINDER_DELAY
+                reminder.created_at = scheduled_at
+                reminder.sent_at = None
+            else:
+                session.add(
+                    FormReminder(
+                        id=reminder_id,
+                        user_id=user.id,
+                        state=state,
+                        payload_encrypted=encrypted,
+                        status=DeliveryStatus.PENDING,
+                        available_at=scheduled_at + FORM_REMINDER_DELAY,
+                        created_at=scheduled_at,
+                    )
+                )
+
+    async def cancel_form_reminder(self, telegram_id: int) -> None:
+        digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
+        async with self.sessions() as session, session.begin():
+            user_id = await session.scalar(select(User.id).where(User.telegram_id_hash == digest))
+            if user_id:
+                await session.execute(delete(FormReminder).where(FormReminder.user_id == user_id))
+
+    async def backfill_form_reminders(
+        self,
+        bot_id: int,
+        payload_builder: FormReminderPayloadBuilder,
+    ) -> int:
+        created = 0
+        async with self.sessions() as session, session.begin():
+            users = list((await session.scalars(select(User))).all())
+            existing_user_ids = set((await session.scalars(select(FormReminder.user_id))).all())
+            for user in users:
+                if user.id in existing_user_ids or user.telegram_id_encrypted == "deleted":
+                    continue
+                try:
+                    telegram_id = int(
+                        self.crypto.decrypt(
+                            user.telegram_id_encrypted,
+                            context=f"user.telegram_id:{user.id}",
+                        )
+                    )
+                except (ValueError, TypeError):
+                    continue
+                raw_storage_key = f"{bot_id}:{telegram_id}:{telegram_id}:0:0:default"
+                key_hash = self.crypto.lookup(raw_storage_key, context="fsm-key")
+                record = await session.get(FsmRecord, key_hash)
+                if not record or not record.state:
+                    continue
+                data: dict[str, Any] = {}
+                if record.data_encrypted:
+                    value = self.crypto.decrypt_json(
+                        record.data_encrypted,
+                        context=f"fsm.data:{record.key_hash}",
+                    )
+                    if isinstance(value, dict):
+                        data = value
+                try:
+                    payload = payload_builder(record.state, data)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if payload is None:
+                    continue
+                text_value, buttons = payload
+                reminder_id = new_id()
+                started_at = _utc(record.updated_at)
+                encrypted = self.crypto.encrypt_json(
+                    {
+                        "text": text_value,
+                        "buttons": [
+                            [[button_text, callback_data] for button_text, callback_data in row]
+                            for row in buttons
+                        ],
+                    },
+                    context=f"form_reminder.payload:{reminder_id}",
+                )
+                session.add(
+                    FormReminder(
+                        id=reminder_id,
+                        user_id=user.id,
+                        state=record.state,
+                        payload_encrypted=encrypted,
+                        status=DeliveryStatus.PENDING,
+                        available_at=started_at + FORM_REMINDER_DELAY,
+                        created_at=started_at,
+                    )
+                )
+                created += 1
+        return created
+
+    async def pending_form_reminder_ids(self) -> list[str]:
+        async with self.sessions() as session:
+            return list(
+                (
+                    await session.scalars(
+                        select(FormReminder.id).where(
+                            FormReminder.status.in_(
+                                (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+                            ),
+                            FormReminder.available_at <= utcnow(),
+                        )
+                    )
+                ).all()
+            )
+
+    async def form_reminder_context(self, reminder_id: str) -> FormReminderContext | None:
+        async with self.sessions() as session, session.begin():
+            row = (
+                await session.execute(
+                    select(FormReminder, User)
+                    .join(User, FormReminder.user_id == User.id)
+                    .where(FormReminder.id == reminder_id)
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            reminder, user = row
+            if reminder.status not in (DeliveryStatus.PENDING, DeliveryStatus.FAILED):
+                return None
+            if _utc(reminder.available_at) > datetime.now(UTC):
+                return None
+            payload = self.crypto.decrypt_json(
+                reminder.payload_encrypted,
+                context=f"form_reminder.payload:{reminder.id}",
+            )
+            reminder.attempts += 1
+            buttons = tuple(
+                tuple((str(button[0]), str(button[1])) for button in row)
+                for row in payload.get("buttons", [])
+            )
+            return FormReminderContext(
+                reminder_id=reminder.id,
+                telegram_id=int(
+                    self.crypto.decrypt(
+                        user.telegram_id_encrypted, context=f"user.telegram_id:{user.id}"
+                    )
+                ),
+                text=str(payload["text"]),
+                buttons=buttons,
+                payload_token=reminder.payload_encrypted,
+            )
+
+    async def mark_form_reminder_sent(
+        self, reminder_id: str, message_id: int, payload_token: str
+    ) -> None:
+        async with self.sessions() as session, session.begin():
+            reminder = await session.get(FormReminder, reminder_id)
+            if (
+                not reminder
+                or reminder.status == DeliveryStatus.SENT
+                or reminder.payload_encrypted != payload_token
+            ):
+                return
+            reminder.status = DeliveryStatus.SENT
+            reminder.payload_encrypted = "sent"
+            reminder.telegram_message_id = message_id
+            reminder.last_error_code = None
+            reminder.sent_at = utcnow()
+
+    async def mark_form_reminder_failed(
+        self, reminder_id: str, error_code: str, payload_token: str
+    ) -> None:
+        async with self.sessions() as session, session.begin():
+            reminder = await session.get(FormReminder, reminder_id)
+            if (
+                not reminder
+                or reminder.status == DeliveryStatus.SENT
+                or reminder.payload_encrypted != payload_token
+            ):
+                return
+            reminder.status = DeliveryStatus.FAILED
+            reminder.last_error_code = error_code
+            reminder.available_at = utcnow() + OFFER_RETRY_DELAY
 
     async def schedule_strength_offer(self, profile_id: str) -> None:
         async with self.sessions() as session, session.begin():
@@ -919,6 +1145,7 @@ class Store:
                     .where(DeliveryItem.order_id.in_(order_ids))
                     .values(telegram_message_id=None)
                 )
+            await session.execute(delete(FormReminder).where(FormReminder.user_id == user.id))
             await session.execute(
                 update(Event).where(Event.user_id == user.id).values(user_id=None)
             )

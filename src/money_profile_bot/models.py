@@ -215,6 +215,24 @@ class StrengthOffer(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class FormReminder(Base):
+    __tablename__ = "form_reminders"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    state: Mapped[str] = mapped_column(String(64))
+    payload_encrypted: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default=DeliveryStatus.PENDING)
+    telegram_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class AdminAudit(Base):
     __tablename__ = "admin_audit"
 

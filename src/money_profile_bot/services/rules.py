@@ -5,9 +5,9 @@ from collections import Counter
 
 from money_profile_bot.domain import ChartFacts, GeneratedProfile
 from money_profile_bot.services.astro import ENGINE_VERSION, element_for_sign
-from money_profile_bot.services.avatar import AVATAR_CHANNELS, display_avatar_name
+from money_profile_bot.services.avatar import avatar_free_caption
 
-RULES_VERSION = "2026-08-29.avatar3"
+RULES_VERSION = "2026-08-29.avatar4"
 DISCLAIMER = (
     "Этот разбор является астрологической интерпретацией для самонаблюдения и "
     "развлечения. Он не является финансовой, инвестиционной, налоговой или юридической "
@@ -332,11 +332,7 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
             "Не увеличивайте расходы и не принимайте инвестиционных решений на основании этого разбора.",
         ),
     )
-    free_insight = (
-        f"<b>Ваш денежный аватар — {money_type}</b>\n\n"
-        f"<b>Основной канал</b>\n{AVATAR_CHANNELS[display_avatar_name(money_type)]}\n\n"
-        f"<b>Сильная сторона</b>\n{strength.capitalize()}."
-    )
+    free_insight = avatar_free_caption(money_type)
     return GeneratedProfile(
         title="Денежный потенциал" if facts.mode == "profile" else "Денежный стиль",
         money_type=money_type,

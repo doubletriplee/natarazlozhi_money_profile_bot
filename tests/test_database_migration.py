@@ -38,3 +38,4 @@ async def test_initialize_adds_delivery_schedule_column_to_existing_database(
 
     assert "available_at" in columns
     assert "strength_offers" in tables
+    assert "form_reminders" in tables

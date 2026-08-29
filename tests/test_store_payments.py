@@ -9,8 +9,12 @@ from typing import cast
 
 import pytest
 import pytest_asyncio
+from aiogram.fsm.storage.base import StorageKey
 from sqlalchemy import func, select, update
 
+from money_profile_bot.bot.router import CITY_PROMPT, form_reminder_payload
+from money_profile_bot.bot.states import ProfileForm
+from money_profile_bot.bot.storage import EncryptedDatabaseStorage
 from money_profile_bot.config import Settings
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
@@ -19,6 +23,7 @@ from money_profile_bot.models import (
     AdminIdentity,
     DeliveryItem,
     DeliveryStatus,
+    FormReminder,
     Order,
     OrderStatus,
     Payment,
@@ -28,7 +33,12 @@ from money_profile_bot.models import (
 from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 from money_profile_bot.services.rules import generate_profile
-from money_profile_bot.services.store import FULL_READING_DELAY, STRENGTH_OFFER_DELAY, Store
+from money_profile_bot.services.store import (
+    FORM_REMINDER_DELAY,
+    FULL_READING_DELAY,
+    STRENGTH_OFFER_DELAY,
+    Store,
+)
 
 
 @dataclass
@@ -247,6 +257,13 @@ async def test_full_reading_offer_is_scheduled_one_hour_after_avatar_result(
         assert delay == timedelta(hours=1)
 
     assert order_id not in await service.pending_order_ids()
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(DeliveryItem)
+            .where(DeliveryItem.id == followup.id)
+            .values(available_at=datetime(2000, 1, 1, tzinfo=UTC))
+        )
+    assert order_id in await service.pending_order_ids()
 
 
 @pytest.mark.asyncio
@@ -326,6 +343,118 @@ async def test_full_reading_offer_can_be_revealed_by_its_owner(
         assert offer.available_at is not None
 
     assert order_id in await service.pending_order_ids()
+
+
+@pytest.mark.asyncio
+async def test_form_reminder_is_replaced_and_sent_only_once_after_one_hour(
+    store: tuple[Store, Database],
+) -> None:
+    service, database = store
+    await service.ensure_user(10001)
+    first_buttons = ((("Знаю точно", "precision:exact"),),)
+    await service.schedule_form_reminder(
+        10001,
+        state="birth_date",
+        text="Введи дату рождения.",
+    )
+    await service.schedule_form_reminder(
+        10001,
+        state="time_precision",
+        text="Насколько точно известно время рождения?",
+        buttons=first_buttons,
+    )
+
+    async with database.sessions() as session:
+        reminders = list((await session.scalars(select(FormReminder))).all())
+        assert len(reminders) == 1
+        reminder = reminders[0]
+        assert reminder.state == "time_precision"
+        delay = reminder.available_at.replace(tzinfo=None) - reminder.created_at.replace(
+            tzinfo=None
+        )
+        assert delay == FORM_REMINDER_DELAY
+        assert delay == timedelta(hours=1)
+
+    assert await service.pending_form_reminder_ids() == []
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(FormReminder)
+            .where(FormReminder.id == reminder.id)
+            .values(available_at=datetime(2000, 1, 1, tzinfo=UTC))
+        )
+
+    assert await service.pending_form_reminder_ids() == [reminder.id]
+    context = await service.form_reminder_context(reminder.id)
+    assert context is not None
+    assert context.telegram_id == 10001
+    assert context.text == "Насколько точно известно время рождения?"
+    assert context.buttons == first_buttons
+
+    await service.mark_form_reminder_sent(
+        reminder.id,
+        message_id=77,
+        payload_token=context.payload_token,
+    )
+    assert await service.pending_form_reminder_ids() == []
+    assert await service.form_reminder_context(reminder.id) is None
+
+    async with database.sessions() as session:
+        sent = await session.get(FormReminder, reminder.id)
+        assert sent is not None
+        assert sent.status == DeliveryStatus.SENT
+        assert sent.payload_encrypted == "sent"
+
+
+@pytest.mark.asyncio
+async def test_form_reminder_can_be_cancelled_when_step_is_completed(
+    store: tuple[Store, Database],
+) -> None:
+    service, database = store
+    await service.ensure_user(10001)
+    await service.schedule_form_reminder(
+        10001,
+        state="city",
+        text="Введи город рождения.",
+    )
+
+    await service.cancel_form_reminder(10001)
+
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(FormReminder)) == 0
+
+
+@pytest.mark.asyncio
+async def test_existing_incomplete_form_is_backfilled_only_once(
+    store: tuple[Store, Database],
+) -> None:
+    service, database = store
+    await service.ensure_user(10001)
+    bot_id = 8530273489
+    storage = EncryptedDatabaseStorage(database.sessions, service.crypto)
+    key = StorageKey(bot_id=bot_id, chat_id=10001, user_id=10001)
+    await storage.set_state(key, ProfileForm.city)
+
+    assert await service.backfill_form_reminders(bot_id, form_reminder_payload) == 1
+    assert await service.backfill_form_reminders(bot_id, form_reminder_payload) == 0
+
+    async with database.sessions() as session:
+        reminder = await session.scalar(select(FormReminder))
+        assert reminder is not None
+        assert reminder.state == ProfileForm.city.state
+        delay = reminder.available_at.replace(tzinfo=None) - reminder.created_at.replace(
+            tzinfo=None
+        )
+        assert delay == timedelta(hours=1)
+
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(FormReminder)
+            .where(FormReminder.id == reminder.id)
+            .values(available_at=datetime(2000, 1, 1, tzinfo=UTC))
+        )
+    context = await service.form_reminder_context(reminder.id)
+    assert context is not None
+    assert context.text == CITY_PROMPT
 
 
 @pytest.mark.asyncio

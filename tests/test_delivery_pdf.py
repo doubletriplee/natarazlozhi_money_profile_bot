@@ -103,6 +103,30 @@ async def test_strength_offer_is_sent_with_payment_button() -> None:
 
 
 @pytest.mark.asyncio
+async def test_form_reminder_repeats_prompt_with_its_buttons_once() -> None:
+    bot, store, worker = _worker_context("avatar_result")
+    store.form_reminder_context.return_value = SimpleNamespace(
+        reminder_id="reminder-1",
+        telegram_id=123456,
+        text="Насколько точно известно время рождения?",
+        buttons=((("Знаю точно", "precision:exact"),),),
+        payload_token="encrypted-payload",
+    )
+
+    delivered = await worker.deliver_form_reminder("reminder-1")
+
+    assert delivered
+    bot.send_message.assert_awaited_once()
+    args = bot.send_message.await_args.args
+    kwargs = bot.send_message.await_args.kwargs
+    assert args == (123456, "Насколько точно известно время рождения?")
+    button = kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Знаю точно"
+    assert button.callback_data == "precision:exact"
+    store.mark_form_reminder_sent.assert_awaited_once_with("reminder-1", 43, "encrypted-payload")
+
+
+@pytest.mark.asyncio
 async def test_legacy_feedback_item_is_completed_without_user_message() -> None:
     bot, store, worker = _worker_context("feedback")
 

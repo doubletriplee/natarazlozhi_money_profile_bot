@@ -45,7 +45,8 @@ def test_all_twelve_house_types_are_deterministic(house: int) -> None:
     assert profile.free_insight.startswith("<b>Ваш денежный аватар —")
     assert "<b>Основной канал</b>\n" in profile.free_insight
     assert AVATAR_CHANNELS[profile.money_type] in profile.free_insight
-    assert "<b>Сильная сторона</b>\n" in profile.free_insight
+    assert "<b>Сильная сторона" not in profile.free_insight
+    assert "<b>А теперь самое интересное — сила твоего аватара.</b>" in profile.free_insight
     assert "Узнать больше" not in profile.free_insight
 
 
