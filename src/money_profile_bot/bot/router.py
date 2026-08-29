@@ -51,6 +51,20 @@ def _price(settings: Settings) -> str:
     return f"{value:,.2f}".replace(",", " ").replace(".00", "") + " ₽"
 
 
+def _offer_caption() -> str:
+    return (
+        "<b>Сила твоего аватара</b>\n\n"
+        "Узнай, в чём его сила, что мешает раскрывать потенциал и через что тебе "
+        "легче приходить к доходу.\n\n"
+        "<b>Внутри:</b>\n"
+        "• твоя сильная сторона\n"
+        "• подходящий формат работы\n"
+        "• как проявляться и продавать\n"
+        "• денежная ловушка\n"
+        "• эксперимент на 7 дней"
+    )
+
+
 def _city_label(city: City) -> str:
     parts = [city.name]
     if city.region:
@@ -313,15 +327,10 @@ def build_router(
             caption=result.free_insight,
         )
         await store.record_event(callback.from_user.id, "offer_viewed")
-        description = (
-            "Сила твоего аватара\n\n"
-            "Узнай, в чём его сила, что мешает тебе раскрывать потенциал и через что "
-            "тебе легче приходить к доходу"
-        )
         button = (f"Раскрыть силу — {_price(settings)}", f"buy:{profile_id}")
         await callback.message.answer_photo(
             FSInputFile(offer_image),
-            caption=description,
+            caption=_offer_caption(),
             reply_markup=_keyboard(button),
         )
 
@@ -448,11 +457,7 @@ def build_router(
             _, result = await store.get_profile_result(access.profile_id)
             await message.answer_photo(
                 FSInputFile(avatars.offer_image(result.money_type)),
-                caption=(
-                    "Сила твоего аватара\n\n"
-                    "Узнай, в чём его сила, что мешает тебе раскрывать потенциал и через что "
-                    "тебе легче приходить к доходу"
-                ),
+                caption=_offer_caption(),
                 reply_markup=_keyboard(
                     (f"Раскрыть силу — {_price(settings)}", f"buy:{access.profile_id}")
                 ),

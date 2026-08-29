@@ -64,7 +64,6 @@ class DeliveryWorker:
                                 f"Денежный_потенциал_{display_avatar_name(result.money_type)}.pdf"
                             ),
                         ),
-                        caption=result.disclaimer,
                     )
                 elif item.kind.startswith("message:") or item.kind == "card":
                     # Очереди ранней тестовой версии могли содержать шесть сообщений и
@@ -74,7 +73,6 @@ class DeliveryWorker:
                         sent = await self.bot.send_document(
                             telegram_id,
                             FSInputFile(pdf_path, filename="Денежный_потенциал.pdf"),
-                            caption=result.disclaimer,
                         )
                         legacy_pdf_sent = True
                     else:
@@ -123,17 +121,15 @@ class DeliveryWorker:
                 pdf_path,
                 filename=f"Денежный_потенциал_{display_avatar_name(result.money_type)}.pdf",
             ),
-            caption=result.disclaimer,
         )
 
     async def _ensure_pdf(self, profile_id: str, name: str, result: GeneratedProfile) -> Path:
         pdf_path = self.pdfs_dir / f"{profile_id}.pdf"
-        if not pdf_path.exists():
-            await asyncio.to_thread(
-                self.renderer.render,
-                name=name,
-                result=result,
-                destination=pdf_path,
-            )
+        await asyncio.to_thread(
+            self.renderer.render,
+            name=name,
+            result=result,
+            destination=pdf_path,
+        )
         await self.store.save_card_path(profile_id, str(pdf_path))
         return pdf_path
