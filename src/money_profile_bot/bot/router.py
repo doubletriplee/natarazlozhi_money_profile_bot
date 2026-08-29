@@ -146,6 +146,15 @@ async def _accept_consent(
         await callback.message.answer("Введи дату рождения в формате ДД.ММ.ГГГГ.")
 
 
+async def _request_data_deletion(message: Message, state: FSMContext) -> None:
+    await state.set_state(DeleteForm.confirm)
+    await message.answer(
+        "Удалить данные рождения и результат расчёта? Обезличенные события и "
+        "минимальный платёжный журнал сохранятся на срок из политики.",
+        reply_markup=_keyboard(("Удалить мои данные", "delete:yes"), ("Отмена", "delete:no")),
+    )
+
+
 def build_router(
     settings: Settings,
     store: Store,
@@ -174,6 +183,12 @@ def build_router(
             await message.answer(
                 "Вы назначены администратором тестового бота. Команда статистики: /stats."
             )
+
+    # Команда удаления должна обрабатываться раньше ответов на шаги анкеты,
+    # иначе Telegram-команда может быть ошибочно прочитана как дата, время или город.
+    @router.message(Command("delete_my_data"))
+    async def delete_my_data(message: Message, state: FSMContext) -> None:
+        await _request_data_deletion(message, state)
 
     @router.callback_query(ProfileForm.consent, F.data == "consent:yes")
     async def consent(callback: CallbackQuery, state: FSMContext) -> None:
@@ -450,15 +465,6 @@ def build_router(
     @router.message(Command("privacy"))
     async def privacy(message: Message) -> None:
         await message.answer(f"Политика конфиденциальности: {settings.public_base_url}/privacy")
-
-    @router.message(Command("delete_my_data"))
-    async def delete_my_data(message: Message, state: FSMContext) -> None:
-        await state.set_state(DeleteForm.confirm)
-        await message.answer(
-            "Удалить данные рождения и результат расчёта? Обезличенные события и "
-            "минимальный платёжный журнал сохранятся на срок из политики.",
-            reply_markup=_keyboard(("Удалить мои данные", "delete:yes"), ("Отмена", "delete:no")),
-        )
 
     @router.callback_query(DeleteForm.confirm, F.data == "delete:no")
     async def delete_no(callback: CallbackQuery, state: FSMContext) -> None:

@@ -12,10 +12,12 @@ from money_profile_bot.bot.router import (
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
+    _request_data_deletion,
     _sales_keyboard,
     _send_free_avatar,
+    build_router,
 )
-from money_profile_bot.bot.states import ProfileForm
+from money_profile_bot.bot.states import DeleteForm, ProfileForm
 from money_profile_bot.config import Settings
 from money_profile_bot.services.avatar import (
     AVATAR_CHANNELS,
@@ -149,6 +151,52 @@ async def test_consent_skips_name_and_requests_birth_date() -> None:
     state.set_state.assert_awaited_once_with(ProfileForm.birth_date)
     callback.message.answer.assert_awaited_once_with("Введи дату рождения в формате ДД.ММ.ГГГГ.")
     assert all("Как тебя зовут?" not in str(call) for call in callback.mock_calls)
+
+
+@pytest.mark.asyncio
+async def test_delete_command_switches_from_profile_form_to_delete_confirmation() -> None:
+    message = AsyncMock()
+    state = AsyncMock()
+
+    await _request_data_deletion(message, state)
+
+    state.set_state.assert_awaited_once_with(DeleteForm.confirm)
+    text = message.answer.await_args.args[0]
+    assert text.startswith("Удалить данные рождения и результат расчёта?")
+    assert "Введи дату рождения" not in text
+    buttons = message.answer.await_args.kwargs["reply_markup"].inline_keyboard
+    assert buttons[0][0].callback_data == "delete:yes"
+    assert buttons[1][0].callback_data == "delete:no"
+
+
+def test_delete_command_has_priority_over_profile_form_answers() -> None:
+    router = build_router(
+        Settings(_env_file=None),
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handlers = router.message.handlers
+    delete_index = next(
+        index
+        for index, handler in enumerate(handlers)
+        if any(
+            "delete_my_data" in getattr(filter_.callback, "commands", ())
+            for filter_ in handler.filters
+        )
+    )
+    profile_state_indexes = [
+        index
+        for index, handler in enumerate(handlers)
+        if any(
+            str(getattr(filter_.callback, "state", "")).startswith("ProfileForm:")
+            for filter_ in handler.filters
+        )
+    ]
+
+    assert profile_state_indexes
+    assert delete_index < min(profile_state_indexes)
 
 
 @pytest.mark.asyncio
