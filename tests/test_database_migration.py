@@ -26,6 +26,15 @@ async def test_initialize_adds_delivery_schedule_column_to_existing_database(
                 await async_connection.execute(text("PRAGMA table_info(delivery_items)"))
             ).all()
         }
+        tables = {
+            str(row[0])
+            for row in (
+                await async_connection.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'table'")
+                )
+            ).all()
+        }
     await database.close()
 
     assert "available_at" in columns
+    assert "strength_offers" in tables

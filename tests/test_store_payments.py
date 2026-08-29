@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from money_profile_bot.config import Settings
 from money_profile_bot.crypto import CryptoBox
@@ -23,11 +23,12 @@ from money_profile_bot.models import (
     OrderStatus,
     Payment,
     ProfileStatus,
+    StrengthOffer,
 )
 from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 from money_profile_bot.services.rules import generate_profile
-from money_profile_bot.services.store import FULL_READING_DELAY, Store
+from money_profile_bot.services.store import FULL_READING_DELAY, STRENGTH_OFFER_DELAY, Store
 
 
 @dataclass
@@ -202,7 +203,7 @@ async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
 
 
 @pytest.mark.asyncio
-async def test_full_reading_offer_is_scheduled_twenty_seconds_after_avatar_result(
+async def test_full_reading_offer_is_scheduled_one_hour_after_avatar_result(
     store: tuple[Store, Database], birth: BirthData
 ) -> None:
     service, database = store
@@ -243,9 +244,88 @@ async def test_full_reading_offer_is_scheduled_twenty_seconds_after_avatar_resul
             tzinfo=None
         )
         assert delay == FULL_READING_DELAY
-        assert delay == timedelta(seconds=20)
+        assert delay == timedelta(hours=1)
 
     assert order_id not in await service.pending_order_ids()
+
+
+@pytest.mark.asyncio
+async def test_strength_offer_is_scheduled_for_one_hour_and_can_be_revealed(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    facts = calculate_chart(birth)
+    result = generate_profile(facts)
+    profile_id = await service.save_calculation(10001, birth, facts, result)
+
+    await service.schedule_strength_offer(profile_id)
+    await service.schedule_strength_offer(profile_id)
+
+    async with database.sessions() as session:
+        offers = list((await session.scalars(select(StrengthOffer))).all())
+        assert len(offers) == 1
+        offer = offers[0]
+        delay = offer.available_at.replace(tzinfo=None) - offer.created_at.replace(tzinfo=None)
+        assert delay == STRENGTH_OFFER_DELAY
+        assert delay == timedelta(hours=1)
+
+    assert await service.pending_strength_offer_profile_ids() == []
+    assert await service.strength_offer_context(profile_id, telegram_id=99999, force=True) is None
+    context = await service.strength_offer_context(profile_id, telegram_id=10001, force=True)
+    assert context is not None
+    assert context.profile_id == profile_id
+    assert context.telegram_id == 10001
+    assert context.money_type == result.money_type
+
+    await service.mark_strength_offer_sent(context.offer_id, message_id=42)
+    assert await service.strength_offer_context(profile_id, telegram_id=10001, force=True) is None
+
+
+@pytest.mark.asyncio
+async def test_strength_offer_becomes_pending_after_one_hour(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    facts = calculate_chart(birth)
+    result = generate_profile(facts)
+    profile_id = await service.save_calculation(10001, birth, facts, result)
+    await service.schedule_strength_offer(profile_id)
+
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(StrengthOffer)
+            .where(StrengthOffer.profile_id == profile_id)
+            .values(available_at=datetime(2000, 1, 1, tzinfo=UTC))
+        )
+
+    assert await service.pending_strength_offer_profile_ids() == [profile_id]
+
+
+@pytest.mark.asyncio
+async def test_full_reading_offer_can_be_revealed_by_its_owner(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    order_id, invoice_id, _ = await prepared_order(service, birth)
+    await service.accept_payment_callback(
+        invoice_id=invoice_id, amount_minor=14900, email="buyer@example.ru"
+    )
+
+    assert not await service.reveal_full_reading_offer(99999, order_id)
+    assert await service.reveal_full_reading_offer(10001, order_id)
+
+    async with database.sessions() as session:
+        offer = await session.scalar(
+            select(DeliveryItem).where(
+                DeliveryItem.order_id == order_id,
+                DeliveryItem.kind == "full_reading_offer",
+            )
+        )
+        assert offer is not None
+        assert offer.status == DeliveryStatus.PENDING
+        assert offer.available_at is not None
+
+    assert order_id in await service.pending_order_ids()
 
 
 @pytest.mark.asyncio

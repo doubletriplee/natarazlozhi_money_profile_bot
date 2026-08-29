@@ -74,6 +74,7 @@ async def serve() -> None:
                 store,
                 avatars,
                 sales_telegram_username=settings.support_username,
+                product_price_rub=settings.product_price_rub,
             )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)

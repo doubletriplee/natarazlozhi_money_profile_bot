@@ -27,7 +27,6 @@ from money_profile_bot.models import OrderStatus
 from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.avatar import (
     INTRO_CAPTION,
-    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     sales_telegram_url,
 )
@@ -38,7 +37,6 @@ from money_profile_bot.services.rules import generate_profile, validate_generate
 from money_profile_bot.services.store import Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-OFFER_DELAY_SECONDS = 4
 
 
 def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
@@ -105,39 +103,31 @@ async def _begin(
     )
 
 
-def _strength_offer_keyboard(profile_id: str, settings: Settings) -> InlineKeyboardMarkup:
+def _strength_trigger_keyboard(profile_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=f"Раскрыть силу - {settings.product_price_rub:.0f}₽",
-                    callback_data=f"buy:{profile_id}",
+                    text="Узнать силу",
+                    callback_data=f"strength:{profile_id}",
                 )
             ]
         ]
     )
 
 
-async def _send_free_avatar_and_offer(
+async def _send_free_avatar(
     message: Message,
     *,
     profile_id: str,
     money_type: str,
     free_insight: str,
-    settings: Settings,
     avatars: AvatarAssets,
-    delay_seconds: int = OFFER_DELAY_SECONDS,
 ) -> None:
     await message.answer_photo(
         FSInputFile(avatars.free_image(money_type)),
         caption=free_insight,
-    )
-    if delay_seconds:
-        await asyncio.sleep(delay_seconds)
-    await message.answer_photo(
-        FSInputFile(avatars.offer_image(money_type)),
-        caption=STRENGTH_OFFER_CAPTION,
-        reply_markup=_strength_offer_keyboard(profile_id, settings),
+        reply_markup=_strength_trigger_keyboard(profile_id),
     )
 
 
@@ -353,15 +343,31 @@ def build_router(
             return
         await state.clear()
         await store.record_event(callback.from_user.id, "profile_calculated")
-        await _send_free_avatar_and_offer(
+        await store.schedule_strength_offer(profile_id)
+        await _send_free_avatar(
             callback.message,
             profile_id=profile_id,
             money_type=result.money_type,
             free_insight=result.free_insight,
-            settings=settings,
             avatars=avatars,
         )
-        await store.record_event(callback.from_user.id, "offer_viewed")
+        delivery.notify()
+
+    @router.callback_query(F.data.startswith("strength:"))
+    async def strength_offer(callback: CallbackQuery) -> None:
+        profile_id = (callback.data or "").split(":", 1)[1]
+        delivered = await delivery.deliver_strength_offer(
+            profile_id,
+            telegram_id=callback.from_user.id,
+            force=True,
+        )
+        if delivered:
+            await callback.answer("Разбор силы уже ниже")
+        else:
+            await callback.answer(
+                "Предложение уже отправлено или недоступно.",
+                show_alert=True,
+            )
 
     @router.callback_query(F.data.startswith("buy:"))
     async def buy(callback: CallbackQuery, state: FSMContext) -> None:
@@ -391,6 +397,19 @@ def build_router(
         await callback.answer("Оплата подтверждена")
         delivery.notify()
 
+    @router.callback_query(F.data.startswith("full:"))
+    async def full_reading_offer(callback: CallbackQuery) -> None:
+        order_id = (callback.data or "").split(":", 1)[1]
+        revealed = await store.reveal_full_reading_offer(callback.from_user.id, order_id)
+        if not revealed:
+            await callback.answer(
+                "Предложение уже отправлено или недоступно.",
+                show_alert=True,
+            )
+            return
+        await callback.answer("Полный разбор уже ниже")
+        await delivery.deliver(order_id)
+
     @router.message(Command("profile"))
     async def profile(message: Message) -> None:
         if not message.from_user:
@@ -406,15 +425,15 @@ def build_router(
                 delivery.notify()
             return
         _, result = await store.get_profile_result(access.profile_id)
-        await _send_free_avatar_and_offer(
+        await store.schedule_strength_offer(access.profile_id)
+        await _send_free_avatar(
             message,
             profile_id=access.profile_id,
             money_type=result.money_type,
             free_insight=result.free_insight,
-            settings=settings,
             avatars=avatars,
         )
-        await store.record_event(message.from_user.id, "offer_viewed")
+        delivery.notify()
 
     @router.message(Command("support"))
     @router.message(Command("paysupport"))
@@ -436,7 +455,7 @@ def build_router(
     async def delete_my_data(message: Message, state: FSMContext) -> None:
         await state.set_state(DeleteForm.confirm)
         await message.answer(
-            "Удалить имя, данные рождения и результат расчёта? Обезличенные события и "
+            "Удалить данные рождения и результат расчёта? Обезличенные события и "
             "минимальный платёжный журнал сохранятся на срок из политики.",
             reply_markup=_keyboard(("Удалить мои данные", "delete:yes"), ("Отмена", "delete:no")),
         )

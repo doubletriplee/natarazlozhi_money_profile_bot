@@ -9,12 +9,11 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 from money_profile_bot.bot.router import (
-    OFFER_DELAY_SECONDS,
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
     _sales_keyboard,
-    _send_free_avatar_and_offer,
+    _send_free_avatar,
 )
 from money_profile_bot.bot.states import ProfileForm
 from money_profile_bot.config import Settings
@@ -25,7 +24,6 @@ from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
     INTRO_CAPTION,
     SALES_MESSAGE_TEXT,
-    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     avatar_paid_caption,
     sales_telegram_url,
@@ -155,11 +153,10 @@ async def test_consent_skips_name_and_requests_birth_date() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("avatar_name", AVATAR_PRESENTATIONS)
-async def test_all_free_avatar_results_are_followed_by_strength_offer(
+async def test_all_free_avatar_results_have_strength_trigger(
     avatar_name: str,
 ) -> None:
     message = AsyncMock()
-    settings = Settings(_env_file=None)
     assets = AvatarAssets(ASSET_DIRECTORY)
 
     free_insight = (
@@ -167,45 +164,21 @@ async def test_all_free_avatar_results_are_followed_by_strength_offer(
         "<b>Основной канал</b>\nТест.\n\n"
         "<b>Сильная сторона</b>\nТест."
     )
-    await _send_free_avatar_and_offer(
+    await _send_free_avatar(
         message,
         profile_id="profile-1",
         money_type=avatar_name,
         free_insight=free_insight,
-        settings=settings,
         avatars=assets,
-        delay_seconds=0,
     )
 
-    assert message.answer_photo.await_count == 2
-    first, second = message.answer_photo.await_args_list
-    assert first.kwargs["caption"] == free_insight
-    assert second.kwargs["caption"] == STRENGTH_OFFER_CAPTION
-    button = second.kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "Раскрыть силу - 149₽"
-    assert button.callback_data == "buy:profile-1"
+    message.answer_photo.assert_awaited_once()
+    kwargs = message.answer_photo.await_args.kwargs
+    assert kwargs["caption"] == free_insight
+    button = kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "Узнать силу"
+    assert button.callback_data == "strength:profile-1"
     assert message.answer_document.await_count == 0
-
-
-@pytest.mark.asyncio
-async def test_strength_offer_is_delayed_by_four_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
-    message = AsyncMock()
-    settings = Settings(_env_file=None)
-    assets = AvatarAssets(ASSET_DIRECTORY)
-    sleep = AsyncMock()
-    monkeypatch.setattr("money_profile_bot.bot.router.asyncio.sleep", sleep)
-
-    await _send_free_avatar_and_offer(
-        message,
-        profile_id="profile-1",
-        money_type="Муза",
-        free_insight="Бесплатный результат",
-        settings=settings,
-        avatars=assets,
-    )
-
-    assert OFFER_DELAY_SECONDS == 4
-    sleep.assert_awaited_once_with(4)
 
 
 def test_sales_keyboard_uses_single_configured_username() -> None:

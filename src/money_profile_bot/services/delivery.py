@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
+from decimal import Decimal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -11,6 +12,7 @@ from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarku
 from money_profile_bot.models import DeliveryStatus
 from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
+    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     avatar_paid_caption,
     sales_telegram_url,
@@ -18,6 +20,8 @@ from money_profile_bot.services.avatar import (
 from money_profile_bot.services.store import Store
 
 logger = logging.getLogger(__name__)
+
+FULL_READING_TRIGGER_TEXT = "Узнать всю денежную картину"
 
 
 class DeliveryWorker:
@@ -28,12 +32,15 @@ class DeliveryWorker:
         avatars: AvatarAssets,
         *,
         sales_telegram_username: str,
+        product_price_rub: Decimal,
     ) -> None:
         self.bot = bot
         self.store = store
         self.avatars = avatars
         self.sales_telegram_url = sales_telegram_url(sales_telegram_username)
+        self.product_price_rub = product_price_rub
         self._wake = asyncio.Event()
+        self._delivery_lock = asyncio.Lock()
         self._stopping = False
 
     def notify(self) -> None:
@@ -41,6 +48,8 @@ class DeliveryWorker:
 
     async def run(self) -> None:
         while not self._stopping:
+            for profile_id in await self.store.pending_strength_offer_profile_ids():
+                await self.deliver_strength_offer(profile_id)
             for order_id in await self.store.pending_order_ids():
                 await self.deliver(order_id)
             self._wake.clear()
@@ -52,6 +61,10 @@ class DeliveryWorker:
         self._wake.set()
 
     async def deliver(self, order_id: str) -> None:
+        async with self._delivery_lock:
+            await self._deliver(order_id)
+
+    async def _deliver(self, order_id: str) -> None:
         try:
             order, telegram_id, _birth, result, items = await self.store.delivery_context(order_id)
         except Exception:
@@ -66,6 +79,7 @@ class DeliveryWorker:
                         telegram_id,
                         FSInputFile(self.avatars.free_image(result.money_type)),
                         caption=avatar_paid_caption(result.money_type),
+                        reply_markup=self._full_reading_trigger_keyboard(order.id),
                     )
                 elif item.kind == "full_reading_offer":
                     sent = await self.bot.send_message(
@@ -101,10 +115,72 @@ class DeliveryWorker:
             )
         await self.store.complete_delivery_if_ready(order.id)
 
+    async def deliver_strength_offer(
+        self,
+        profile_id: str,
+        *,
+        telegram_id: int | None = None,
+        force: bool = False,
+    ) -> bool:
+        async with self._delivery_lock:
+            try:
+                context = await self.store.strength_offer_context(
+                    profile_id,
+                    telegram_id=telegram_id,
+                    force=force,
+                )
+            except Exception:
+                logger.exception("strength offer context failed", extra={"profile_id": profile_id})
+                return False
+            if context is None:
+                return False
+            try:
+                sent = await self.bot.send_photo(
+                    context.telegram_id,
+                    FSInputFile(self.avatars.offer_image(context.money_type)),
+                    caption=STRENGTH_OFFER_CAPTION,
+                    reply_markup=self._strength_offer_keyboard(context.profile_id),
+                )
+            except (TelegramAPIError, OSError, RuntimeError, ValueError) as exc:
+                logger.warning(
+                    "strength offer delivery failed",
+                    extra={"profile_id": profile_id, "error": type(exc).__name__},
+                )
+                await self.store.mark_strength_offer_failed(context.offer_id, type(exc).__name__)
+                return False
+            await self.store.mark_strength_offer_sent(context.offer_id, sent.message_id)
+            return True
+
+    def _strength_offer_keyboard(self, profile_id: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"Раскрыть силу - {self.product_price_rub:.0f}₽",
+                        callback_data=f"buy:{profile_id}",
+                    )
+                ]
+            ]
+        )
+
+    @staticmethod
+    def _full_reading_trigger_keyboard(order_id: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=FULL_READING_TRIGGER_TEXT,
+                        callback_data=f"full:{order_id}",
+                    )
+                ]
+            ]
+        )
+
     async def send_copy(self, order_id: str) -> None:
-        _, telegram_id, _birth, result, _ = await self.store.delivery_context(order_id)
+        order, telegram_id, _birth, result, _ = await self.store.delivery_context(order_id)
         await self.bot.send_photo(
             telegram_id,
             FSInputFile(self.avatars.free_image(result.money_type)),
             caption=avatar_paid_caption(result.money_type),
+            reply_markup=self._full_reading_trigger_keyboard(order.id),
         )

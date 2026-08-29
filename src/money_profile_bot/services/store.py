@@ -28,13 +28,16 @@ from money_profile_bot.models import (
     Payment,
     Profile,
     ProfileStatus,
+    StrengthOffer,
     User,
     new_id,
     utcnow,
 )
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 
-FULL_READING_DELAY = timedelta(seconds=20)
+STRENGTH_OFFER_DELAY = timedelta(hours=1)
+FULL_READING_DELAY = timedelta(hours=1)
+OFFER_RETRY_DELAY = timedelta(minutes=5)
 
 
 def _order_code() -> str:
@@ -78,6 +81,14 @@ class ProfileAccess:
     order_status: str | None
     payment_url: str | None
     order_code: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class StrengthOfferContext:
+    offer_id: str
+    profile_id: str
+    telegram_id: int
+    money_type: str
 
 
 class Store:
@@ -211,6 +222,112 @@ class Store:
             result_data["messages"] = tuple(result_data["messages"])
             result_data["triggered_rule_ids"] = tuple(result_data["triggered_rule_ids"])
             return birth, GeneratedProfile(**result_data)
+
+    async def schedule_strength_offer(self, profile_id: str) -> None:
+        async with self.sessions() as session, session.begin():
+            existing = await session.scalar(
+                select(StrengthOffer).where(StrengthOffer.profile_id == profile_id)
+            )
+            if existing:
+                return
+            profile = await session.get(Profile, profile_id)
+            if not profile or profile.deleted_at is not None:
+                raise LookupError("profile not found")
+            scheduled_at = utcnow()
+            session.add(
+                StrengthOffer(
+                    profile_id=profile_id,
+                    status=DeliveryStatus.PENDING,
+                    available_at=scheduled_at + STRENGTH_OFFER_DELAY,
+                    created_at=scheduled_at,
+                )
+            )
+
+    async def pending_strength_offer_profile_ids(self) -> list[str]:
+        async with self.sessions() as session:
+            return list(
+                (
+                    await session.scalars(
+                        select(StrengthOffer.profile_id).where(
+                            StrengthOffer.status.in_(
+                                (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+                            ),
+                            StrengthOffer.available_at <= utcnow(),
+                        )
+                    )
+                ).all()
+            )
+
+    async def strength_offer_context(
+        self,
+        profile_id: str,
+        *,
+        telegram_id: int | None = None,
+        force: bool = False,
+    ) -> StrengthOfferContext | None:
+        digest = (
+            self.crypto.lookup(str(telegram_id), context="telegram-user")
+            if telegram_id is not None
+            else None
+        )
+        async with self.sessions() as session, session.begin():
+            query = (
+                select(StrengthOffer, Profile, User)
+                .join(Profile, StrengthOffer.profile_id == Profile.id)
+                .join(User, Profile.user_id == User.id)
+                .where(
+                    StrengthOffer.profile_id == profile_id,
+                    Profile.deleted_at.is_(None),
+                )
+            )
+            if digest is not None:
+                query = query.where(User.telegram_id_hash == digest)
+            row = (await session.execute(query)).one_or_none()
+            if row is None:
+                return None
+            offer, profile, user = row
+            if offer.status not in (DeliveryStatus.PENDING, DeliveryStatus.FAILED):
+                return None
+            if not force and _utc(offer.available_at) > datetime.now(UTC):
+                return None
+            if not profile.result_encrypted:
+                return None
+            result_data = self.crypto.decrypt_json(
+                profile.result_encrypted, context=f"profile.result:{profile.id}"
+            )
+            offer.attempts += 1
+            return StrengthOfferContext(
+                offer_id=offer.id,
+                profile_id=profile.id,
+                telegram_id=int(
+                    self.crypto.decrypt(
+                        user.telegram_id_encrypted, context=f"user.telegram_id:{user.id}"
+                    )
+                ),
+                money_type=str(result_data["money_type"]),
+            )
+
+    async def mark_strength_offer_sent(self, offer_id: str, message_id: int) -> None:
+        async with self.sessions() as session, session.begin():
+            offer = await session.get(StrengthOffer, offer_id)
+            if not offer or offer.status == DeliveryStatus.SENT:
+                return
+            offer.status = DeliveryStatus.SENT
+            offer.telegram_message_id = message_id
+            offer.last_error_code = None
+            offer.sent_at = utcnow()
+            profile = await session.get(Profile, offer.profile_id)
+            if profile:
+                session.add(Event(user_id=profile.user_id, name="offer_viewed"))
+
+    async def mark_strength_offer_failed(self, offer_id: str, error_code: str) -> None:
+        async with self.sessions() as session, session.begin():
+            offer = await session.get(StrengthOffer, offer_id)
+            if not offer or offer.status == DeliveryStatus.SENT:
+                return
+            offer.status = DeliveryStatus.FAILED
+            offer.last_error_code = error_code
+            offer.available_at = utcnow() + OFFER_RETRY_DELAY
 
     async def latest_profile_for_user(self, telegram_id: int) -> Profile | None:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
@@ -514,6 +631,32 @@ class Store:
                 ).all()
             )
 
+    async def reveal_full_reading_offer(self, telegram_id: int, order_id: str) -> bool:
+        digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
+        async with self.sessions() as session, session.begin():
+            order = await session.scalar(
+                select(Order)
+                .join(User)
+                .where(
+                    Order.id == order_id,
+                    User.telegram_id_hash == digest,
+                    Order.status.in_((OrderStatus.PAID, OrderStatus.DELIVERED)),
+                )
+            )
+            if not order:
+                return False
+            offer = await session.scalar(
+                select(DeliveryItem).where(
+                    DeliveryItem.order_id == order.id,
+                    DeliveryItem.kind == "full_reading_offer",
+                )
+            )
+            if not offer or offer.status == DeliveryStatus.SENT:
+                return False
+            offer.status = DeliveryStatus.PENDING
+            offer.available_at = utcnow()
+            return True
+
     async def mark_delivery_item(
         self,
         item_id: str,
@@ -715,6 +858,9 @@ class Store:
                 ).all()
             )
             for profile in profiles:
+                await session.execute(
+                    delete(StrengthOffer).where(StrengthOffer.profile_id == profile.id)
+                )
                 profile.birth_data_encrypted = "expired"
                 profile.facts_encrypted = None
                 profile.result_encrypted = None
@@ -742,6 +888,9 @@ class Store:
             ]
             if profile_ids:
                 await session.execute(delete(Feedback).where(Feedback.profile_id.in_(profile_ids)))
+                await session.execute(
+                    delete(StrengthOffer).where(StrengthOffer.profile_id.in_(profile_ids))
+                )
                 await session.execute(
                     update(Profile)
                     .where(Profile.id.in_(profile_ids))
