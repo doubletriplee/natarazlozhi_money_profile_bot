@@ -271,8 +271,7 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
         f"<b>Ваш денежный аватар — {money_type}</b>\n\n"
         f"<b>Основной канал</b>\n{channel.capitalize()}.\n\n"
         f"<b>Сильная сторона</b>\n{strength.capitalize()}.\n\n"
-        "Это короткий ориентир по карте. В продолжении — формат работы, стиль проявления, "
-        "денежная ловушка и эксперимент на 7 дней."
+        "<b>Узнать больше ↓</b>"
     )
     return GeneratedProfile(
         title="Денежный потенциал" if facts.mode == "profile" else "Денежный стиль",

@@ -37,6 +37,7 @@ class OrderStatus(StrEnum):
 
 
 class DeliveryStatus(StrEnum):
+    SCHEDULED = "scheduled"
     PENDING = "pending"
     SENDING = "sending"
     SENT = "sent"
@@ -193,6 +194,7 @@ class DeliveryItem(Base):
     telegram_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

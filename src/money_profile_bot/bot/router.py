@@ -36,6 +36,7 @@ from money_profile_bot.services.store import Store
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 NAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё .'-]{0,58}[A-Za-zА-Яа-яЁё.]$")
 EMAIL_RE = re.compile(r"^[^\s@]{1,64}@[^\s@.]{1,190}\.[^\s@]{2,63}$")
+OFFER_DELAY_SECONDS = 5
 
 
 def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
@@ -48,7 +49,7 @@ def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
 
 def _price(settings: Settings) -> str:
     value = settings.product_price_rub.quantize(Decimal("0.01"))
-    return f"{value:,.2f}".replace(",", " ").replace(".00", "") + " ₽"
+    return f"{value:,.2f}".replace(",", " ").replace(".00", "") + "₽"
 
 
 def _offer_caption() -> str:
@@ -326,13 +327,14 @@ def build_router(
             FSInputFile(avatar_image),
             caption=result.free_insight,
         )
-        await store.record_event(callback.from_user.id, "offer_viewed")
+        await asyncio.sleep(OFFER_DELAY_SECONDS)
         button = (f"Раскрыть силу — {_price(settings)}", f"buy:{profile_id}")
         await callback.message.answer_photo(
             FSInputFile(offer_image),
             caption=_offer_caption(),
             reply_markup=_keyboard(button),
         )
+        await store.record_event(callback.from_user.id, "offer_viewed")
 
     @router.callback_query(F.data.startswith("buy:"))
     async def buy(callback: CallbackQuery, state: FSMContext) -> None:

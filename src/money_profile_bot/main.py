@@ -75,6 +75,8 @@ async def serve() -> None:
                 store,
                 PdfRenderer(avatars),
                 settings.pdf_output_directory,
+                full_reading_offer_image=avatars.full_reading_offer_image(),
+                full_reading_contact_url=f"https://t.me/{settings.support_username}",
             )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)

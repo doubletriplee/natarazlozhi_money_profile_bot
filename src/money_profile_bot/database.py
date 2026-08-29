@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -32,6 +32,17 @@ class Database:
     async def initialize(self) -> None:
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            if self.engine.url.drivername.startswith("sqlite"):
+                columns = {
+                    str(row[1])
+                    for row in (
+                        await connection.execute(text("PRAGMA table_info(delivery_items)"))
+                    ).all()
+                }
+                if "available_at" not in columns:
+                    await connection.execute(
+                        text("ALTER TABLE delivery_items ADD COLUMN available_at DATETIME")
+                    )
 
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessions() as session:

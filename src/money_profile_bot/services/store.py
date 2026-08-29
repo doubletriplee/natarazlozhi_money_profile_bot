@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,6 +33,8 @@ from money_profile_bot.models import (
     utcnow,
 )
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
+
+FULL_READING_DELAY = timedelta(minutes=3)
 
 
 def _order_code() -> str:
@@ -431,10 +433,20 @@ class Store:
                 .where(DeliveryItem.order_id == order.id)
             )
             if not existing_count:
-                kinds = ["pdf", "feedback"]
+                kinds = ["pdf", "feedback", "full_reading_offer"]
                 session.add_all(
                     [
-                        DeliveryItem(order_id=order.id, sequence=index, kind=kind)
+                        DeliveryItem(
+                            order_id=order.id,
+                            sequence=index,
+                            kind=kind,
+                            status=(
+                                DeliveryStatus.SCHEDULED
+                                if kind == "full_reading_offer"
+                                else DeliveryStatus.PENDING
+                            ),
+                            available_at=utcnow() if kind != "full_reading_offer" else None,
+                        )
                         for index, kind in enumerate(kinds, start=1)
                     ]
                 )
@@ -488,9 +500,13 @@ class Store:
                         select(Order.id)
                         .join(DeliveryItem)
                         .where(
-                            Order.status == OrderStatus.PAID,
+                            Order.status.in_((OrderStatus.PAID, OrderStatus.DELIVERED)),
                             DeliveryItem.status.in_(
                                 (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
+                            ),
+                            or_(
+                                DeliveryItem.available_at.is_(None),
+                                DeliveryItem.available_at <= utcnow(),
                             ),
                         )
                         .distinct()
@@ -515,7 +531,19 @@ class Store:
             item.telegram_message_id = message_id or item.telegram_message_id
             item.last_error_code = error_code
             if status is DeliveryStatus.SENT:
-                item.sent_at = utcnow()
+                sent_at = utcnow()
+                item.sent_at = sent_at
+                if item.kind == "pdf":
+                    followup = await session.scalar(
+                        select(DeliveryItem).where(
+                            DeliveryItem.order_id == item.order_id,
+                            DeliveryItem.kind == "full_reading_offer",
+                            DeliveryItem.status == DeliveryStatus.SCHEDULED,
+                        )
+                    )
+                    if followup:
+                        followup.status = DeliveryStatus.PENDING
+                        followup.available_at = sent_at + FULL_READING_DELAY
 
     async def complete_delivery_if_ready(self, order_id: str) -> bool:
         async with self.sessions() as session, session.begin():
@@ -525,6 +553,7 @@ class Store:
                 .where(
                     DeliveryItem.order_id == order_id,
                     DeliveryItem.status != DeliveryStatus.SENT,
+                    DeliveryItem.kind != "full_reading_offer",
                 )
             )
             if remaining:

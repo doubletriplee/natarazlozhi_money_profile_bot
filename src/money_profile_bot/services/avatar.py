@@ -62,6 +62,12 @@ class AvatarAssets:
     def offer_image(self, money_type: str) -> Path:
         return self._resolve("continuation", money_type)
 
+    def full_reading_offer_image(self) -> Path:
+        path = self.directory / "full_reading_offer.png"
+        if not path.is_file():
+            raise FileNotFoundError(f"full reading offer asset is missing: {path}")
+        return path
+
     def _resolve(self, prefix: str, money_type: str) -> Path:
         avatar = display_avatar_name(money_type)
         path = self.directory / f"{prefix}_{AVATAR_SLUGS[avatar]}.png"

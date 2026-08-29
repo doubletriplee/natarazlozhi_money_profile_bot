@@ -32,6 +32,7 @@ TOTAL_PAGES = len(PAGE_TITLES) + 1
 SITE_URL = "https://natarazlozhi.ru/"
 INSTAGRAM_URL = "https://www.instagram.com/it_natali/"
 TELEGRAM_URL = "https://t.me/natarazlozhi"
+PERSONAL_CONTACT_URL = "https://t.me/simnatali"
 
 BACKGROUND = HexColor("#090604")
 SURFACE = HexColor("#15100C")
@@ -137,7 +138,7 @@ class PdfRenderer:
                     page=index,
                 )
                 document.showPage()
-            self._draw_cta_page(document, name=name)
+            self._draw_cta_page(document)
             document.showPage()
             document.save()
             temporary.replace(destination)
@@ -368,139 +369,46 @@ class PdfRenderer:
         document.drawPath(plane, stroke=0, fill=1)
         document.restoreState()
 
-    def _draw_cta_page(self, document: canvas.Canvas, *, name: str) -> None:
-        self._draw_base(document, name=name, page=TOTAL_PAGES)
+    def _draw_cta_page(self, document: canvas.Canvas) -> None:
+        document.setFillColor(BACKGROUND)
+        document.rect(0, 0, self.WIDTH, self.HEIGHT, stroke=0, fill=1)
+        document.setStrokeColor(BORDER)
+        document.setLineWidth(0.7)
+        document.roundRect(24, 24, self.WIDTH - 48, self.HEIGHT - 48, 18, stroke=1, fill=0)
 
-        left_x = 48
-        left_width = 252
-        right_x = 322
-        right_width = self.WIDTH - right_x - 42
-
-        document.setFillColor(GOLD)
-        document.setFont("AvatarSansBold", 9)
-        document.drawString(left_x, self.HEIGHT - 118, "ИНДИВИДУАЛЬНЫЙ РАЗБОР")
-
-        title = document.beginText(left_x, self.HEIGHT - 196)
-        title.setFont("AvatarSansBold", 31)
-        title.setLeading(39)
-        title.setCharSpace(-0.78)
+        title_size = 29
+        title_width = pdfmetrics.stringWidth(CTA_TITLE, "AvatarSansBold", title_size)
+        title = document.beginText((self.WIDTH - title_width) / 2, self.HEIGHT / 2 + 70)
+        title.setFont("AvatarSansBold", title_size)
+        title.setCharSpace(-title_size * 0.025)
         title.setFillColor(CREAM)
-        title.textLine("Хочешь полный")
-        title.textLine("разбор?")
+        title.textLine(CTA_TITLE)
         document.drawText(title)
 
-        intro_style = ParagraphStyle(
-            name="CtaIntro",
-            fontName="AvatarSans",
-            fontSize=11.2,
-            leading=16.8,
-            textColor=CREAM,
-            alignment=TA_LEFT,
-        )
-        intro = Paragraph(
-            "В этом PDF мы разобрали денежный аватар. Полный разбор по натальной карте "
-            "покажет, как именно Венера проявляется в твоих ресурсах, работе и продажах.",
-            intro_style,
-        )
-        _, intro_height = intro.wrap(left_width, 140)
-        intro.drawOn(document, left_x, self.HEIGHT - 305 - intro_height)
-
-        bullets = (
-            "знак, дом и аспекты Венеры",
-            "ресурсы и подходящие направления",
-            "ограничения и персональный план роста",
-        )
-        bullet_y = self.HEIGHT - 386
-        for bullet in bullets:
-            document.setFillColor(GOLD)
-            document.circle(left_x + 4, bullet_y + 4, 2.4, stroke=0, fill=1)
-            paragraph = Paragraph(escape(bullet), intro_style)
-            _, height = paragraph.wrap(left_width - 20, 50)
-            paragraph.drawOn(document, left_x + 16, bullet_y - height + 9)
-            bullet_y -= max(36, height + 12)
-
-        button_y = 164
-        document.setFillColor(GOLD)
-        document.roundRect(left_x, button_y, left_width, 56, 16, stroke=0, fill=1)
-        document.setFillColor(BACKGROUND)
-        document.setFont("AvatarSansBold", 9.4)
-        document.drawCentredString(
-            left_x + left_width / 2,
-            button_y + 34,
-            "ПОЛУЧИТЬ ПОЛНЫЙ РАЗБОР",
-        )
-        document.setFont("AvatarSansBold", 11.5)
-        document.drawCentredString(left_x + left_width / 2, button_y + 16, "1 990 ₽")
-        document.linkURL(SITE_URL, (left_x, button_y, left_x + left_width, button_y + 56))
-
-        document.setFillColor(MUTED)
-        document.setFont("AvatarSans", 8.2)
-        document.drawString(left_x, button_y - 24, "Подробнее на natarazlozhi.ru")
-        detail_width = pdfmetrics.stringWidth("Подробнее на natarazlozhi.ru", "AvatarSans", 8.2)
-        document.linkURL(
-            SITE_URL,
-            (left_x, button_y - 27, left_x + detail_width, button_y - 14),
-        )
-
-        self._draw_cta_art(document, x=right_x, y=92, width=right_width, height=632)
-
-    def _draw_cta_art(
-        self,
-        document: canvas.Canvas,
-        *,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-    ) -> None:
-        document.setFillColor(HexColor("#1B0E0E"))
-        document.setStrokeColor(BORDER)
-        document.roundRect(x, y, width, height, 18, stroke=1, fill=1)
-
-        center_x = x + width / 2
-        planet_y = y + height * 0.46
-        for radius, color in (
-            (88, "#3A1E15"),
-            (80, "#633621"),
-            (69, "#945B37"),
-            (57, "#C98B5B"),
-            (44, "#E1B58C"),
-            (29, "#F3D8BD"),
-        ):
-            document.setFillColor(HexColor(color))
-            document.circle(
-                center_x - (88 - radius) * 0.18,
-                planet_y + (88 - radius) * 0.16,
-                radius,
-                stroke=0,
-                fill=1,
-            )
-
-        document.setStrokeColor(Color(0.94, 0.78, 0.58, alpha=0.32))
-        document.setLineWidth(0.6)
-        for offset in (-30, -12, 10, 33):
-            document.ellipse(
-                center_x - 71,
-                planet_y + offset - 9,
-                center_x + 71,
-                planet_y + offset + 9,
-                stroke=1,
-                fill=0,
-            )
-
-        document.setStrokeColor(Color(0.78, 0.48, 0.24, alpha=0.42))
-        for radius in (106, 126):
-            document.circle(center_x, planet_y, radius, stroke=1, fill=0)
-
-        line_top = y + height - 54
-        line_bottom = y + 54
         document.setStrokeColor(GOLD)
-        document.setLineWidth(0.8)
-        document.line(center_x, line_bottom, center_x, line_top)
-        points = (line_bottom + 34, planet_y - 110, planet_y + 112, line_top - 34)
-        for index, cy in enumerate(points):
-            color = ("#C55A42", "#D5A148", "#8DBE90", "#BD75BF")[index]
-            document.setFillColor(HexColor(color))
-            document.circle(center_x, cy, 7, stroke=0, fill=1)
-            document.setStrokeColor(CREAM)
-            document.circle(center_x, cy, 12, stroke=1, fill=0)
+        document.setLineWidth(1)
+        document.line(
+            self.WIDTH / 2 - 54, self.HEIGHT / 2 + 38, self.WIDTH / 2 + 54, self.HEIGHT / 2 + 38
+        )
+
+        instruction = "Пиши «Хочу денежный разбор»"
+        document.setFillColor(MUTED)
+        document.setFont("AvatarSans", 14)
+        document.drawCentredString(self.WIDTH / 2, self.HEIGHT / 2 - 4, instruction)
+
+        contact = "@simnatali"
+        contact_size = 18
+        contact_width = pdfmetrics.stringWidth(contact, "AvatarSansBold", contact_size)
+        pill_width = contact_width + 52
+        pill_x = (self.WIDTH - pill_width) / 2
+        pill_y = self.HEIGHT / 2 - 86
+        document.setFillColor(SURFACE_ALT)
+        document.setStrokeColor(GOLD)
+        document.roundRect(pill_x, pill_y, pill_width, 48, 16, stroke=1, fill=1)
+        document.setFillColor(CREAM)
+        document.setFont("AvatarSansBold", contact_size)
+        document.drawCentredString(self.WIDTH / 2, pill_y + 15, contact)
+        document.linkURL(
+            PERSONAL_CONTACT_URL,
+            (pill_x, pill_y, pill_x + pill_width, pill_y + 48),
+        )

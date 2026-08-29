@@ -41,6 +41,8 @@ def test_all_twelve_house_types_are_deterministic(house: int) -> None:
     assert profile.money_type == HOUSE_TYPES[house][0]
     assert len(profile.messages) == 6
     assert validate_generated_profile(profile) == []
+    assert "Это короткий ориентир по карте" not in profile.free_insight
+    assert profile.free_insight.endswith("<b>Узнать больше ↓</b>")
 
 
 @pytest.mark.parametrize("element", ELEMENTS)

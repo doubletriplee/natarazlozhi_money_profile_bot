@@ -17,6 +17,7 @@ from money_profile_bot.domain import BirthData
 from money_profile_bot.models import (
     AdminIdentity,
     DeliveryItem,
+    DeliveryStatus,
     Order,
     OrderStatus,
     Payment,
@@ -25,7 +26,7 @@ from money_profile_bot.models import (
 from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.robokassa import Invoice, RobokassaClient
 from money_profile_bot.services.rules import generate_profile
-from money_profile_bot.services.store import Store
+from money_profile_bot.services.store import FULL_READING_DELAY, Store
 
 
 @dataclass
@@ -101,7 +102,7 @@ async def test_successful_callback_locks_profile_and_builds_delivery_queue(
             select(func.count()).select_from(DeliveryItem).where(DeliveryItem.order_id == order_id)
         )
         payments = await session.scalar(select(func.count()).select_from(Payment))
-    assert count == 2
+    assert count == 3
     assert payments == 1
 
 
@@ -195,8 +196,53 @@ async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
                 .select_from(DeliveryItem)
                 .where(DeliveryItem.order_id == link.order_id)
             )
-            == 2
+            == 3
         )
+
+
+@pytest.mark.asyncio
+async def test_full_reading_offer_is_scheduled_three_minutes_after_pdf(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    order_id, invoice_id, _ = await prepared_order(service, birth)
+    await service.accept_payment_callback(
+        invoice_id=invoice_id, amount_minor=14900, email="buyer@example.ru"
+    )
+
+    async with database.sessions() as session:
+        items = list(
+            (
+                await session.scalars(
+                    select(DeliveryItem)
+                    .where(DeliveryItem.order_id == order_id)
+                    .order_by(DeliveryItem.sequence)
+                )
+            ).all()
+        )
+    pdf, feedback, followup = items
+    assert [item.kind for item in items] == ["pdf", "feedback", "full_reading_offer"]
+    assert followup.status == DeliveryStatus.SCHEDULED
+    assert followup.available_at is None
+
+    await service.mark_delivery_item(pdf.id, status=DeliveryStatus.SENT, message_id=10)
+    await service.mark_delivery_item(feedback.id, status=DeliveryStatus.SENT, message_id=11)
+    assert await service.complete_delivery_if_ready(order_id)
+
+    async with database.sessions() as session:
+        order = await session.get(Order, order_id)
+        sent_pdf = await session.get(DeliveryItem, pdf.id)
+        scheduled = await session.get(DeliveryItem, followup.id)
+        assert order is not None and order.status == OrderStatus.DELIVERED
+        assert sent_pdf is not None and sent_pdf.sent_at is not None
+        assert scheduled is not None
+        assert scheduled.status == DeliveryStatus.PENDING
+        assert scheduled.available_at is not None
+        assert scheduled.sent_at is None
+        delay = scheduled.available_at.replace(tzinfo=None) - sent_pdf.sent_at.replace(tzinfo=None)
+        assert delay == FULL_READING_DELAY
+
+    assert order_id not in await service.pending_order_ids()
 
 
 @pytest.mark.asyncio

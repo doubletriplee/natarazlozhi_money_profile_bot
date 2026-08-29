@@ -17,13 +17,41 @@ from money_profile_bot.services.store import Store
 
 logger = logging.getLogger(__name__)
 
+FULL_READING_CAPTION = (
+    "<b>Полный разбор денежной сферы по твоей натальной карте</b>\n\n"
+    "<b>Внутри ты узнаешь:</b>\n\n"
+    "— через что тебе легче зарабатывать;\n"
+    "— твои главные денежные ресурсы и сильные стороны;\n"
+    "— какой формат работы тебе подходит;\n"
+    "— подходящие профессии и современные направления;\n"
+    "— какие увлечения можно превратить в доход;\n"
+    "— какие привычки и сценарии мешают росту;\n"
+    "— как увереннее назначать цену и защищать свои границы;\n"
+    "— как тебе лучше обращаться с деньгами;\n"
+    "— персональный план роста дохода на полгода;\n"
+    "— твою денежную формулу и первый конкретный шаг.\n\n"
+    "Обычная стоимость — <s>1 990 ₽</s>\n"
+    "<b>Твоя специальная цена после покупки денежного аватара — 990 ₽</b>"
+)
+
 
 class DeliveryWorker:
-    def __init__(self, bot: Bot, store: Store, renderer: PdfRenderer, pdfs_dir: Path) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        store: Store,
+        renderer: PdfRenderer,
+        pdfs_dir: Path,
+        *,
+        full_reading_offer_image: Path | None = None,
+        full_reading_contact_url: str = "https://t.me/simnatali",
+    ) -> None:
         self.bot = bot
         self.store = store
         self.renderer = renderer
         self.pdfs_dir = pdfs_dir
+        self.full_reading_offer_image = full_reading_offer_image
+        self.full_reading_contact_url = full_reading_contact_url
         self._wake = asyncio.Event()
         self._stopping = False
 
@@ -51,7 +79,7 @@ class DeliveryWorker:
         has_pdf_item = any(item.kind == "pdf" for item in items)
         legacy_pdf_sent = False
         for item in items:
-            if item.status == DeliveryStatus.SENT:
+            if item.status in (DeliveryStatus.SCHEDULED, DeliveryStatus.SENT):
                 continue
             try:
                 if item.kind == "pdf":
@@ -95,6 +123,24 @@ class DeliveryWorker:
                         "Насколько разбор оказался полезным? Выберите оценку от 1 до 5. "
                         "PDF можно переслать обычной кнопкой Telegram.",
                         reply_markup=keyboard,
+                    )
+                elif item.kind == "full_reading_offer":
+                    if self.full_reading_offer_image is None:
+                        raise RuntimeError("full reading offer image is not configured")
+                    sent = await self.bot.send_photo(
+                        telegram_id,
+                        FSInputFile(self.full_reading_offer_image),
+                        caption=FULL_READING_CAPTION,
+                        reply_markup=InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text="Получить полный разбор — 990 ₽",
+                                        url=self.full_reading_contact_url,
+                                    )
+                                ]
+                            ]
+                        ),
                     )
                 else:
                     raise ValueError("unknown delivery item kind")
