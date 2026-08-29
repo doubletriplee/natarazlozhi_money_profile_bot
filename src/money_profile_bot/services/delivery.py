@@ -11,29 +11,11 @@ from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarku
 
 from money_profile_bot.domain import GeneratedProfile
 from money_profile_bot.models import DeliveryStatus
-from money_profile_bot.services.avatar import display_avatar_name
+from money_profile_bot.services.avatar import FULL_READING_CAPTION, display_avatar_name
 from money_profile_bot.services.pdf import PdfRenderer
 from money_profile_bot.services.store import Store
 
 logger = logging.getLogger(__name__)
-
-FULL_READING_CAPTION = (
-    "<b>А теперь соберём всю денежную картину</b>\n\n"
-    "Аватар показал один важный слой карты. В полном разборе мы соединяем его "
-    "с профессией, продажами и денежными сценариями — чтобы вместо догадок "
-    "у тебя появился ясный план.\n\n"
-    "<b>Ты получишь:</b>\n"
-    "— через что тебе легче приходить к доходу\n"
-    "— подходящие профессии и формат работы\n"
-    "— привычки, которые тормозят рост\n"
-    "— как проявляться, продавать и называть цену\n"
-    "— личный план действий на полгода\n\n"
-    "Не набор общих советов, а цельная картина: на что опереться, "
-    "что изменить и с какого шага начать.\n\n"
-    "Обычная стоимость — <s>1 990 ₽</s>\n"
-    "<b>Твоя цена после денежного аватара — 990 ₽</b>"
-)
-
 
 class DeliveryWorker:
     def __init__(
@@ -107,23 +89,8 @@ class DeliveryWorker:
                         await self.store.mark_delivery_item(item.id, status=DeliveryStatus.SENT)
                         continue
                 elif item.kind == "feedback":
-                    keyboard = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=str(rating),
-                                    callback_data=f"rating:{order.profile_id}:{rating}",
-                                )
-                                for rating in range(1, 6)
-                            ]
-                        ]
-                    )
-                    sent = await self.bot.send_message(
-                        telegram_id,
-                        "Насколько разбор оказался полезным? Выберите оценку от 1 до 5. "
-                        "PDF можно переслать обычной кнопкой Telegram.",
-                        reply_markup=keyboard,
-                    )
+                    await self.store.mark_delivery_item(item.id, status=DeliveryStatus.SENT)
+                    continue
                 elif item.kind == "full_reading_offer":
                     if self.full_reading_offer_image is None:
                         raise RuntimeError("full reading offer image is not configured")
@@ -135,7 +102,7 @@ class DeliveryWorker:
                             inline_keyboard=[
                                 [
                                     InlineKeyboardButton(
-                                        text="Хочу полный разбор — 990 ₽",
+                                        text="Хочу денежный разбор",
                                         url=self.full_reading_contact_url,
                                     )
                                 ]

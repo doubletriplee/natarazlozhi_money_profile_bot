@@ -18,9 +18,7 @@ from money_profile_bot.config import Settings, ensure_runtime_directories
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
 from money_profile_bot.services.avatar import AvatarAssets
-from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.geonames import CityCatalog
-from money_profile_bot.services.pdf import PdfRenderer
 from money_profile_bot.services.robokassa import RobokassaClient, RobokassaError
 from money_profile_bot.services.store import Store
 from money_profile_bot.web.app import create_web_app
@@ -53,7 +51,6 @@ async def serve() -> None:
     crypto = CryptoBox(settings.app_encryption_key, settings.lookup_hmac_key)
 
     bot: Bot | None = None
-    delivery: DeliveryWorker | None = None
     dispatcher: Dispatcher | None = None
     tasks: list[asyncio.Task[object]] = []
     runner: web.AppRunner | None = None
@@ -70,14 +67,6 @@ async def serve() -> None:
                 session=AiohttpSession(proxy=settings.telegram_proxy_url or None),
             )
             avatars = AvatarAssets(settings.avatar_asset_directory)
-            delivery = DeliveryWorker(
-                bot,
-                store,
-                PdfRenderer(avatars),
-                settings.pdf_output_directory,
-                full_reading_offer_image=avatars.full_reading_offer_image(),
-                full_reading_contact_url=f"https://t.me/{settings.support_username}",
-            )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)
             dispatcher.include_router(
@@ -85,20 +74,17 @@ async def serve() -> None:
                     settings,
                     store,
                     CityCatalog(settings.geonames_database_path),
-                    delivery,
                     avatars,
                 )
             )
 
-        app = create_web_app(settings, store, robokassa, delivery)
+        app = create_web_app(settings, store, robokassa, None)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, settings.http_host, settings.http_port)
         await site.start()
         logger.info("public service started on configured address")
 
-        if delivery:
-            tasks.append(asyncio.create_task(delivery.run(), name="delivery-worker"))
         tasks.append(asyncio.create_task(maintenance(store, settings), name="maintenance-worker"))
 
         try:
@@ -111,8 +97,6 @@ async def serve() -> None:
             else:
                 await asyncio.Event().wait()
         finally:
-            if delivery:
-                delivery.stop()
             for task in tasks:
                 task.cancel()
             for task in tasks:

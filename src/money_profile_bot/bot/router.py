@@ -5,7 +5,6 @@ import html
 import re
 from dataclasses import asdict
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +21,16 @@ from aiogram.types import (
 )
 
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
-from money_profile_bot.config import PaymentMode, Settings
+from money_profile_bot.config import Settings
 from money_profile_bot.domain import BirthData, City, TimePrecision
-from money_profile_bot.models import OrderStatus, ProfileStatus
 from money_profile_bot.services.astro import calculate_chart
-from money_profile_bot.services.avatar import AvatarAssets
-from money_profile_bot.services.delivery import DeliveryWorker
+from money_profile_bot.services.avatar import (
+    FULL_READING_CAPTION,
+    INTRO_CAPTION,
+    AvatarAssets,
+    avatar_caption,
+    sales_telegram_url,
+)
 from money_profile_bot.services.geonames import CityCatalog
 from money_profile_bot.services.robokassa import RobokassaError
 from money_profile_bot.services.rules import generate_profile, validate_generated_profile
@@ -35,7 +38,6 @@ from money_profile_bot.services.store import Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 NAME_RE = re.compile(r"^[A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё .'-]{0,58}[A-Za-zА-Яа-яЁё.]$")
-EMAIL_RE = re.compile(r"^[^\s@]{1,64}@[^\s@.]{1,190}\.[^\s@]{2,63}$")
 OFFER_DELAY_SECONDS = 5
 
 
@@ -47,27 +49,6 @@ def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
     )
 
 
-def _price(settings: Settings) -> str:
-    value = settings.product_price_rub.quantize(Decimal("0.01"))
-    return f"{value:,.2f}".replace(",", " ").replace(".00", "") + "₽"
-
-
-def _offer_caption() -> str:
-    return (
-        "<b>Твоя сила уже есть. Покажу, как её использовать</b>\n\n"
-        "Аватар показал твой денежный стиль. Теперь переведём его в работу, "
-        "продажи и конкретные действия.\n\n"
-        "<b>В личном PDF:</b>\n"
-        "— на чём держится твоя сила\n"
-        "— какой формат работы подходит тебе\n"
-        "— как продавать без чужой роли\n"
-        "— где ты сама тормозишь свой рост\n"
-        "— что попробовать уже в ближайшие 7 дней\n\n"
-        "Не просто описание характера, а твоя инструкция: на что опереться, "
-        "чего избегать и что сделать первым."
-    )
-
-
 def _city_label(city: City) -> str:
     parts = [city.name]
     if city.region:
@@ -76,13 +57,74 @@ def _city_label(city: City) -> str:
     return ", ".join(parts)
 
 
-async def _begin(message: Message, state: FSMContext) -> None:
+def _birth_date_is_plausible(value: date, *, today: date | None = None) -> bool:
+    reference = today or date.today()
+    age = reference.year - value.year - (
+        (reference.month, reference.day) < (value.month, value.day)
+    )
+    return value <= reference and age <= 120
+
+
+def _intro_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="Условия", url=f"{settings.public_base_url}/terms"),
+                InlineKeyboardButton(
+                    text="Политика", url=f"{settings.public_base_url}/privacy"
+                ),
+            ],
+            [InlineKeyboardButton(text="Узнать свой аватар", callback_data="consent:yes")],
+        ]
+    )
+
+
+def _sales_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Хочу денежный разбор",
+                    url=sales_telegram_url(settings.support_username),
+                )
+            ]
+        ]
+    )
+
+
+async def _begin(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    avatars: AvatarAssets,
+) -> None:
     await state.clear()
-    await state.set_state(ProfileForm.adult)
-    await message.answer(
-        "«Денежный потенциал» — персональная астрологическая интерпретация о стиле "
-        "монетизации, работе и продажах. Сначала подтвердите, что вам исполнилось 18 лет.",
-        reply_markup=_keyboard(("Мне есть 18 лет", "adult:yes"), ("Мне нет 18 лет", "adult:no")),
+    await state.set_state(ProfileForm.consent)
+    await message.answer_photo(
+        FSInputFile(avatars.first_message_image()),
+        caption=INTRO_CAPTION,
+        reply_markup=_intro_keyboard(settings),
+    )
+
+
+async def _send_avatar_and_offer(
+    message: Message,
+    *,
+    money_type: str,
+    settings: Settings,
+    avatars: AvatarAssets,
+    delay_seconds: int = OFFER_DELAY_SECONDS,
+) -> None:
+    await message.answer_photo(
+        FSInputFile(avatars.free_image(money_type)),
+        caption=avatar_caption(money_type),
+    )
+    if delay_seconds:
+        await asyncio.sleep(delay_seconds)
+    await message.answer_photo(
+        FSInputFile(avatars.full_reading_offer_image()),
+        caption=FULL_READING_CAPTION,
+        reply_markup=_sales_keyboard(settings),
     )
 
 
@@ -90,7 +132,6 @@ def build_router(
     settings: Settings,
     store: Store,
     cities: CityCatalog,
-    delivery: DeliveryWorker,
     avatars: AvatarAssets,
 ) -> Router:
     router = Router(name="money-profile")
@@ -104,48 +145,15 @@ def build_router(
             return
         source = command.args if command.args and START_RE.fullmatch(command.args) else "direct"
         await store.ensure_user(message.from_user.id, source)
+        newly_claimed_admin = False
         if settings.bootstrap_admin_on_first_start:
             claim = await store.claim_admin_if_unset(message.from_user.id)
-            if claim.newly_claimed:
-                await message.answer(
-                    "Вы назначены администратором тестового бота. Команда статистики: /stats."
-                )
+            newly_claimed_admin = claim.newly_claimed
         await store.record_event(message.from_user.id, "bot_started")
-        access = await store.profile_access(message.from_user.id)
-        if access and access.profile_status == ProfileStatus.PAID:
-            await message.answer("Ваш оплаченный профиль уже готов. Используйте /profile.")
-            return
-        await _begin(message, state)
-
-    @router.callback_query(ProfileForm.adult, F.data == "adult:no")
-    async def adult_no(callback: CallbackQuery, state: FSMContext) -> None:
-        await state.clear()
-        await callback.answer()
-        if callback.message:
-            await callback.message.answer("Продукт доступен только пользователям старше 18 лет.")
-
-    @router.callback_query(ProfileForm.adult, F.data == "adult:yes")
-    async def adult_yes(callback: CallbackQuery, state: FSMContext) -> None:
-        await state.set_state(ProfileForm.consent)
-        await callback.answer()
-        if callback.message:
-            await callback.message.answer(
-                "Для расчёта нужны имя, дата, время и место рождения. Нажимая «Согласен», вы "
-                "принимаете условия и даёте согласие на обработку этих данных. Разбор носит "
-                "развлекательный характер.",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="Условия", url=f"{settings.public_base_url}/terms"
-                            ),
-                            InlineKeyboardButton(
-                                text="Политика", url=f"{settings.public_base_url}/privacy"
-                            ),
-                        ],
-                        [InlineKeyboardButton(text="Согласен", callback_data="consent:yes")],
-                    ]
-                ),
+        await _begin(message, state, settings, avatars)
+        if newly_claimed_admin:
+            await message.answer(
+                "Вы назначены администратором тестового бота. Команда статистики: /stats."
             )
 
     @router.callback_query(ProfileForm.consent, F.data == "consent:yes")
@@ -156,29 +164,29 @@ def build_router(
         await state.set_state(ProfileForm.name)
         await callback.answer()
         if callback.message:
-            await callback.message.answer("Как вас называть в разборе? Введите имя.")
+            await callback.message.answer("Как тебя называть? Введи имя.")
 
     @router.message(ProfileForm.name)
     async def name(message: Message, state: FSMContext) -> None:
         value = (message.text or "").strip()
         if len(value) > 60 or len(value) < 2 or not NAME_RE.fullmatch(value):
-            await message.answer("Введите имя длиной 2–60 символов, без цифр и служебных знаков.")
+            await message.answer("Введи имя длиной 2–60 символов, без цифр и служебных знаков.")
             return
         await state.update_data(name=value)
         await state.set_state(ProfileForm.birth_date)
-        await message.answer("Введите дату рождения в формате ДД.ММ.ГГГГ.")
+        await message.answer("Введи дату рождения в формате ДД.ММ.ГГГГ.")
 
     @router.message(ProfileForm.birth_date)
     async def birth_date(message: Message, state: FSMContext) -> None:
         try:
             value = datetime.strptime((message.text or "").strip(), "%d.%m.%Y").date()
         except ValueError:
-            await message.answer("Не удалось прочитать дату. Используйте формат ДД.ММ.ГГГГ.")
+            await message.answer("Не удалось прочитать дату. Используй формат ДД.ММ.ГГГГ.")
             return
-        today = date.today()
-        age = today.year - value.year - ((today.month, today.day) < (value.month, value.day))
-        if age < 18 or age > 120:
-            await message.answer("Для продукта нужен возраст от 18 до 120 лет. Проверьте дату.")
+        if not _birth_date_is_plausible(value):
+            await message.answer(
+                "Дата рождения не может быть в будущем. Проверь, правильно ли указан год."
+            )
             return
         await state.update_data(birth_date=value.isoformat())
         await state.set_state(ProfileForm.time_precision)
@@ -204,7 +212,7 @@ def build_router(
             await state.set_state(ProfileForm.city)
             if callback.message:
                 await callback.message.answer(
-                    "Введите только город рождения, например: Москва. Страну писать не нужно — "
+                    "Введи только город рождения, например: Москва. Страну писать не нужно — "
                     "если найдётся несколько городов, я покажу варианты с регионом и страной."
                 )
         else:
@@ -215,19 +223,19 @@ def build_router(
                     if value == TimePrecision.APPROXIMATE
                     else ""
                 )
-                await callback.message.answer(f"Введите время рождения в формате ЧЧ:ММ.{warning}")
+                await callback.message.answer(f"Введи время рождения в формате ЧЧ:ММ.{warning}")
 
     @router.message(ProfileForm.birth_time)
     async def birth_time(message: Message, state: FSMContext) -> None:
         try:
             value = datetime.strptime((message.text or "").strip(), "%H:%M").time()
         except ValueError:
-            await message.answer("Не удалось прочитать время. Используйте формат ЧЧ:ММ.")
+            await message.answer("Не удалось прочитать время. Используй формат ЧЧ:ММ.")
             return
         await state.update_data(birth_time=value.isoformat())
         await state.set_state(ProfileForm.city)
         await message.answer(
-            "Введите только город рождения, например: Москва. Страну писать не нужно — "
+            "Введи только город рождения, например: Москва. Страну писать не нужно — "
             "если найдётся несколько городов, я покажу варианты с регионом и страной."
         )
 
@@ -235,12 +243,12 @@ def build_router(
     async def city(message: Message, state: FSMContext) -> None:
         query = (message.text or "").strip()
         if len(query) > 120:
-            await message.answer("Название города слишком длинное. Введите только город.")
+            await message.answer("Название города слишком длинное. Введи только город.")
             return
         variants = await cities.search(query)
         if not variants:
             await message.answer(
-                "Не получилось найти город. Введите только его название без страны, например: "
+                "Не получилось найти город. Введи только его название без страны, например: "
                 f"Москва. Можно указать ближайший крупный город или написать @{settings.support_username}."
             )
             return
@@ -252,7 +260,7 @@ def build_router(
                 for index, item in enumerate(variants)
             ]
         )
-        await message.answer("Выберите подходящий вариант:", reply_markup=keyboard)
+        await message.answer("Выбери подходящий вариант:", reply_markup=keyboard)
 
     @router.callback_query(ProfileForm.city_choice, F.data.startswith("city:"))
     async def city_choice(callback: CallbackQuery, state: FSMContext) -> None:
@@ -261,7 +269,7 @@ def build_router(
             index = int((callback.data or "").split(":", 1)[1])
             selected = data["city_options"][index]
         except (ValueError, IndexError, KeyError):
-            await callback.answer("Вариант устарел. Введите город ещё раз.", show_alert=True)
+            await callback.answer("Вариант устарел. Введи город ещё раз.", show_alert=True)
             await state.set_state(ProfileForm.city)
             return
         await state.update_data(city=selected)
@@ -273,9 +281,13 @@ def build_router(
             "approximate": "примерное",
             "unknown": "неизвестно",
         }
-        time_text = data.get("birth_time") or "не указано"
+        time_text = (
+            time.fromisoformat(data["birth_time"]).strftime("%H:%M")
+            if data.get("birth_time")
+            else "не указано"
+        )
         summary = (
-            f"Проверьте данные:\n\nИмя: {html.escape(data['name'])}\n"
+            f"Проверь данные:\n\nИмя: {html.escape(data['name'])}\n"
             f"Дата: {datetime.fromisoformat(data['birth_date']).strftime('%d.%m.%Y')}\n"
             f"Время: {time_text} ({precision_names[data['time_precision']]})\n"
             f"Место: {html.escape(_city_label(City(**selected)))}"
@@ -292,11 +304,11 @@ def build_router(
     async def form_restart(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         if isinstance(callback.message, Message):
-            await _begin(callback.message, state)
+            await _begin(callback.message, state, settings, avatars)
 
     @router.callback_query(ProfileForm.confirm, F.data == "form:confirm")
     async def form_confirm(callback: CallbackQuery, state: FSMContext) -> None:
-        if not callback.message:
+        if not isinstance(callback.message, Message):
             return
         await callback.answer("Рассчитываю профиль…")
         raw = await state.get_data()
@@ -313,122 +325,23 @@ def build_router(
             issues = validate_generated_profile(result)
             if issues:
                 raise RuntimeError("generated content failed validation: " + "; ".join(issues))
-            avatar_image = avatars.free_image(result.money_type)
-            offer_image = avatars.offer_image(result.money_type)
-            profile_id = await store.save_calculation(callback.from_user.id, birth, facts, result)
+            await store.save_calculation(callback.from_user.id, birth, facts, result)
         except Exception:
             await callback.message.answer(
-                f"Расчёт временно не завершён. Попробуйте позже или напишите @{settings.support_username}."
+                f"Расчёт временно не завершён. Попробуй позже или напиши @{settings.support_username}."
             )
             return
         await state.clear()
         await store.record_event(callback.from_user.id, "profile_calculated")
         if facts.warning:
             await callback.message.answer(f"Важно: {facts.warning}")
-        await callback.message.answer_photo(
-            FSInputFile(avatar_image),
-            caption=result.free_insight,
-        )
-        await asyncio.sleep(OFFER_DELAY_SECONDS)
-        button = (f"Получить мой разбор — {_price(settings)}", f"buy:{profile_id}")
-        await callback.message.answer_photo(
-            FSInputFile(offer_image),
-            caption=_offer_caption(),
-            reply_markup=_keyboard(button),
+        await _send_avatar_and_offer(
+            callback.message,
+            money_type=result.money_type,
+            settings=settings,
+            avatars=avatars,
         )
         await store.record_event(callback.from_user.id, "offer_viewed")
-
-    @router.callback_query(F.data.startswith("buy:"))
-    async def buy(callback: CallbackQuery, state: FSMContext) -> None:
-        profile_id = (callback.data or "").split(":", 1)[1]
-        access = await store.profile_access(callback.from_user.id)
-        if not access or access.profile_id != profile_id:
-            await callback.answer("Профиль не найден", show_alert=True)
-            return
-        if access.order_status in (OrderStatus.PAID, OrderStatus.DELIVERED):
-            await callback.answer("Оплата уже получена. Откройте /profile.", show_alert=True)
-            return
-        if settings.payment_mode is PaymentMode.FAKE:
-            try:
-                order = await store.create_fake_paid_order(
-                    telegram_id=callback.from_user.id,
-                    profile_id=profile_id,
-                )
-            except RuntimeError:
-                await callback.answer("Не удалось открыть тестовый результат", show_alert=True)
-                return
-            await state.clear()
-            await store.record_event(callback.from_user.id, "fake_payment_succeeded")
-            delivery.notify()
-            await callback.answer("Тестовый доступ открыт")
-            if callback.message:
-                await callback.message.answer(
-                    f"Тестовый заказ {order.code} подтверждён без списания денег. "
-                    "Отправляю полный результат."
-                )
-            return
-        await state.set_state(ProfileForm.email)
-        await state.update_data(payment_profile_id=profile_id)
-        await callback.answer()
-        if callback.message:
-            await callback.message.answer(
-                "Введите email, на который Robokassa отправит чек. Мы не используем его для рассылок."
-            )
-
-    @router.message(ProfileForm.email)
-    async def payment_email(message: Message, state: FSMContext) -> None:
-        if not message.from_user:
-            return
-        email = (message.text or "").strip().casefold()
-        if len(email) > 254 or not EMAIL_RE.fullmatch(email):
-            await message.answer("Проверьте email и введите его в формате name@example.ru.")
-            return
-        raw = await state.get_data()
-        profile_id = raw.get("payment_profile_id")
-        if not profile_id:
-            await state.clear()
-            await message.answer("Сессия устарела. Откройте /profile и повторите оплату.")
-            return
-        try:
-            order = await store.create_order(
-                telegram_id=message.from_user.id,
-                profile_id=profile_id,
-                email=email,
-                amount_minor=settings.product_price_minor,
-            )
-        except (RobokassaError, RuntimeError):
-            await message.answer(
-                f"Не удалось создать ссылку на оплату. Попробуйте позже или напишите @{settings.support_username}."
-            )
-            return
-        await state.clear()
-        await store.record_event(message.from_user.id, "payment_link_created")
-        await message.answer(
-            f"Заказ {order.code}. После нажатия откроется защищённая страница Robokassa. "
-            "Чек придёт на указанный email. Результат будет отправлен сюда только после подтверждения оплаты.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text=f"Оплатить {_price(settings)}", url=order.url)],
-                    [
-                        InlineKeyboardButton(
-                            text="Проверить оплату", callback_data=f"check:{order.order_id}"
-                        )
-                    ],
-                ]
-            ),
-        )
-
-    @router.callback_query(F.data.startswith("check:"))
-    async def check_payment(callback: CallbackQuery) -> None:
-        access = await store.profile_access(callback.from_user.id)
-        order_id = (callback.data or "").split(":", 1)[1]
-        if not access or access.order_id != order_id:
-            await callback.answer("Заказ не найден", show_alert=True)
-        elif access.order_status in (OrderStatus.PAID, OrderStatus.DELIVERED):
-            delivery.notify()
-            await callback.answer("Оплата подтверждена. Результат отправляется.", show_alert=True)
-        else:
-            await callback.answer("Подтверждение от Robokassa ещё не получено.", show_alert=True)
 
     @router.message(Command("profile"))
     async def profile(message: Message) -> None:
@@ -436,54 +349,24 @@ def build_router(
             return
         access = await store.profile_access(message.from_user.id)
         if not access:
-            await message.answer("Денежный аватар ещё не рассчитан. Начните с /start.")
+            await message.answer("Денежный аватар ещё не рассчитан. Начни с /start.")
             return
-        if access.order_status == OrderStatus.DELIVERED and access.order_id:
-            await delivery.send_copy(access.order_id)
-        elif access.order_status == OrderStatus.PAID and access.order_id:
-            delivery.notify()
-            await message.answer("Оплата подтверждена. Завершаю выдачу результата.")
-        elif access.payment_url:
-            await message.answer(
-                f"Оплата заказа {access.order_code} ещё не подтверждена.",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text=f"Оплатить {_price(settings)}", url=access.payment_url
-                            )
-                        ]
-                    ]
-                ),
-            )
-        else:
-            _, result = await store.get_profile_result(access.profile_id)
-            await message.answer_photo(
-                FSInputFile(avatars.offer_image(result.money_type)),
-                caption=_offer_caption(),
-                reply_markup=_keyboard(
-                    (f"Получить мой разбор — {_price(settings)}", f"buy:{access.profile_id}")
-                ),
-            )
-
-    @router.callback_query(F.data.startswith("rating:"))
-    async def rating(callback: CallbackQuery) -> None:
-        try:
-            _, profile_id, raw_rating = (callback.data or "").split(":", 2)
-            await store.save_feedback(callback.from_user.id, profile_id, int(raw_rating))
-        except (ValueError, LookupError):
-            await callback.answer("Не удалось сохранить оценку", show_alert=True)
-            return
-        await callback.answer("Спасибо! Оценка сохранена.", show_alert=True)
-        if isinstance(callback.message, Message):
-            await callback.message.edit_reply_markup(reply_markup=None)
+        _, result = await store.get_profile_result(access.profile_id)
+        await _send_avatar_and_offer(
+            message,
+            money_type=result.money_type,
+            settings=settings,
+            avatars=avatars,
+            delay_seconds=0,
+        )
+        await store.record_event(message.from_user.id, "offer_viewed")
 
     @router.message(Command("support"))
     @router.message(Command("paysupport"))
     async def support(message: Message) -> None:
         await message.answer(
-            f"Поддержка: @{settings.support_username}. По оплате укажите код заказа, но не "
-            "присылайте данные карты, пароли или коды из SMS."
+            f"Поддержка: @{settings.support_username}. Не присылай данные карты, "
+            "пароли или коды из SMS."
         )
 
     @router.message(Command("terms"))
@@ -498,7 +381,7 @@ def build_router(
     async def delete_my_data(message: Message, state: FSMContext) -> None:
         await state.set_state(DeleteForm.confirm)
         await message.answer(
-            "Удалить имя, данные рождения, результат, PDF и отзыв? Обезличенные события и "
+            "Удалить имя, данные рождения и результат расчёта? Обезличенные события и "
             "минимальный платёжный журнал сохранятся на срок из политики.",
             reply_markup=_keyboard(("Удалить мои данные", "delete:yes"), ("Отмена", "delete:no")),
         )
@@ -606,7 +489,7 @@ async def set_commands(bot: Any) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="start", description="Начать расчёт"),
-            BotCommand(command="profile", description="Получить сохранённый результат"),
+            BotCommand(command="profile", description="Показать сохранённый аватар"),
             BotCommand(command="support", description="Поддержка"),
             BotCommand(command="paysupport", description="Вопросы по оплате"),
             BotCommand(command="terms", description="Условия"),
