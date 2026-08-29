@@ -64,6 +64,8 @@ async def test_full_reading_offer_uses_image_price_and_contact_button(tmp_path: 
     kwargs = bot.send_photo.await_args.kwargs
     assert kwargs["caption"] == FULL_READING_CAPTION
     assert "<s>1 990 ₽</s>" in kwargs["caption"]
+    assert "личный план действий на полгода" in kwargs["caption"]
+    assert len(kwargs["caption"]) <= 1024
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "Получить полный разбор — 990 ₽"
+    assert button.text == "Хочу полный разбор — 990 ₽"
     assert button.url == "https://t.me/simnatali"

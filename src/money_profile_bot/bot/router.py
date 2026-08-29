@@ -54,15 +54,17 @@ def _price(settings: Settings) -> str:
 
 def _offer_caption() -> str:
     return (
-        "<b>Сила твоего аватара</b>\n\n"
-        "Узнай, в чём его сила, что мешает раскрывать потенциал и через что тебе "
-        "легче приходить к доходу.\n\n"
-        "<b>Внутри:</b>\n"
-        "• твоя сильная сторона\n"
-        "• подходящий формат работы\n"
-        "• как проявляться и продавать\n"
-        "• денежная ловушка\n"
-        "• эксперимент на 7 дней"
+        "<b>Твоя сила уже есть. Покажу, как её использовать</b>\n\n"
+        "Аватар показал твой денежный стиль. Теперь переведём его в работу, "
+        "продажи и конкретные действия.\n\n"
+        "<b>В личном PDF:</b>\n"
+        "— на чём держится твоя сила\n"
+        "— какой формат работы подходит тебе\n"
+        "— как продавать без чужой роли\n"
+        "— где ты сама тормозишь свой рост\n"
+        "— что попробовать уже в ближайшие 7 дней\n\n"
+        "Не просто описание характера, а твоя инструкция: на что опереться, "
+        "чего избегать и что сделать первым."
     )
 
 
@@ -328,7 +330,7 @@ def build_router(
             caption=result.free_insight,
         )
         await asyncio.sleep(OFFER_DELAY_SECONDS)
-        button = (f"Раскрыть силу — {_price(settings)}", f"buy:{profile_id}")
+        button = (f"Получить мой разбор — {_price(settings)}", f"buy:{profile_id}")
         await callback.message.answer_photo(
             FSInputFile(offer_image),
             caption=_offer_caption(),
@@ -460,7 +462,7 @@ def build_router(
                 FSInputFile(avatars.offer_image(result.money_type)),
                 caption=_offer_caption(),
                 reply_markup=_keyboard(
-                    (f"Раскрыть силу — {_price(settings)}", f"buy:{access.profile_id}")
+                    (f"Получить мой разбор — {_price(settings)}", f"buy:{access.profile_id}")
                 ),
             )
 

@@ -268,9 +268,12 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
         ),
     )
     free_insight = (
-        f"<b>Ваш денежный аватар — {money_type}</b>\n\n"
-        f"<b>Основной канал</b>\n{channel.capitalize()}.\n\n"
-        f"<b>Сильная сторона</b>\n{strength.capitalize()}.\n\n"
+        f"<b>Твой денежный аватар — {money_type}</b>\n\n"
+        f"Тебе легче создавать ценность через {channel}. "
+        f"Твоя сильная сторона — {strength}.\n\n"
+        "Скорее всего, ты уже используешь эту силу — просто не всегда замечаешь, "
+        "как превратить её в понятный доход. Ниже покажу, что поможет её раскрыть "
+        "и что может незаметно тормозить твой рост.\n\n"
         "<b>Узнать больше ↓</b>"
     )
     return GeneratedProfile(

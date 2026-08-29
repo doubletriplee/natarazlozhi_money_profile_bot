@@ -7,5 +7,6 @@ def test_avatar_offer_copy_and_delay() -> None:
     assert OFFER_DELAY_SECONDS == 5
     assert _price(settings) == "149₽"
     caption = _offer_caption()
-    assert "Сила твоего аватара" in caption
-    assert "эксперимент на 7 дней" in caption
+    assert "Твоя сила уже есть" in caption
+    assert "ближайшие 7 дней" in caption
+    assert "твоя инструкция" in caption
