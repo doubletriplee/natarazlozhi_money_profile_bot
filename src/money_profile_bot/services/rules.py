@@ -207,10 +207,10 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
     triggered: list[str] = []
     venus = facts.planets.get("Венера")
     mercury = facts.planets.get("Меркурий")
-    if venus is None:
-        raise ValueError("stable Venus data is required")
 
     if facts.mode == "profile" and facts.second_house_ruler_house:
+        if venus is None:
+            raise ValueError("Venus data is required for a house profile")
         ruler_house = facts.second_house_ruler_house
         money_type, channel, _ = HOUSE_TYPES[ruler_house]
         type_basis = (
@@ -219,13 +219,16 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
         cusp_sign = facts.cusp_signs[1] if facts.cusp_signs else venus.sign
         triggered.extend((f"type.ruler_house.{ruler_house}", f"cusp2.{cusp_sign}"))
     else:
+        possible_signs = facts.venus_possible_signs or ((venus.sign,) if venus else ())
+        if not possible_signs:
+            raise ValueError("possible Venus signs are required for a style profile")
         possible_elements = tuple(
-            dict.fromkeys(element_for_sign(sign) for sign in facts.venus_possible_signs)
+            dict.fromkeys(element_for_sign(sign) for sign in possible_signs)
         )
         primary_element = possible_elements[0]
         money_type, channel, _ = UNKNOWN_TYPES[primary_element]
         type_basis = f"Венера находится в стихии «{primary_element}»"
-        cusp_sign = venus.sign
+        cusp_sign = possible_signs[0]
         triggered.append(f"style.venus_element.{primary_element}")
         if len(possible_elements) > 1:
             alternatives = " или ".join(UNKNOWN_TYPES[element][0] for element in possible_elements)
@@ -254,7 +257,7 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
     if trap_planet not in RECOMMENDATIONS:
         trap_planet = "Венера"
     actions = RECOMMENDATIONS[trap_planet]
-    sales_element = mercury.element if mercury else venus.element
+    sales_element = mercury.element if mercury else element_for_sign(cusp_sign)
     sales = SALES_BY_ELEMENT[sales_element]
     format_text = channel
     if facts.mode == "profile" and facts.second_house_ruler_house in {7, 11}:

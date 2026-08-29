@@ -8,6 +8,7 @@ import pytest
 from money_profile_bot.domain import BirthData, TimePrecision
 from money_profile_bot.services import astro
 from money_profile_bot.services.astro import calculate_chart, element_for_sign, sign_for
+from money_profile_bot.services.rules import generate_profile
 
 
 @pytest.mark.parametrize(
@@ -100,3 +101,8 @@ def test_unknown_time_reports_venus_transition(
     monkeypatch.setattr(astro, "_planet_longitudes", fake)
     facts = calculate_chart(replace(birth, time_precision=TimePrecision.UNKNOWN, birth_time=None))
     assert facts.venus_possible_signs == ("Овен", "Телец")
+    assert "Венера" not in facts.planets
+
+    profile = generate_profile(facts)
+    assert profile.money_type == "Вдохновительница или Мастерица"
+    assert "style.venus_transition" in profile.triggered_rule_ids
