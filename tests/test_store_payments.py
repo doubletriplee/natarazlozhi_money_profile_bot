@@ -197,6 +197,57 @@ async def test_delete_removes_personal_profile_but_keeps_payment_journal(
 
 
 @pytest.mark.asyncio
+async def test_expired_payment_data_is_removed_without_revoking_profile_access(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    order_id, invoice_id, profile_id = await prepared_order(service, birth)
+    await service.accept_payment_callback(
+        invoice_id=invoice_id, amount_minor=14900, email="buyer@example.ru"
+    )
+    old_received_at = datetime.now(UTC) - timedelta(days=31)
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(Payment)
+            .where(Payment.order_id == order_id)
+            .values(
+                received_at=old_received_at,
+                provider_operation_hash="operation-hash",
+                provider_operation_encrypted="encrypted-operation",
+                provider_payment_method="card",
+                refund_request_id="refund-id",
+                refund_status="finished",
+            )
+        )
+        await session.execute(
+            update(Order)
+            .where(Order.id == order_id)
+            .values(
+                refund_confirmation_hash="confirmation-hash",
+                refund_confirmation_expires_at=datetime.now(UTC),
+            )
+        )
+
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    assert await service.cleanup_expired_payment_data(cutoff) == 1
+    assert await service.cleanup_expired_payment_data(cutoff) == 0
+
+    access = await service.profile_access(10001)
+    assert access is not None
+    assert access.profile_id == profile_id
+    assert access.order_status == OrderStatus.PAID
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(Payment)) == 0
+        order = await session.get(Order, order_id)
+        assert order is not None
+        assert order.provider_invoice_uuid is None
+        assert order.payment_url is None
+        assert order.receipt_email_encrypted == "expired"
+        assert order.refund_confirmation_hash is None
+        assert order.refund_confirmation_expires_at is None
+
+
+@pytest.mark.asyncio
 async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
     store: tuple[Store, Database], birth: BirthData
 ) -> None:

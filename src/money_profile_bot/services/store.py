@@ -1101,6 +1101,35 @@ class Store:
                 profile.deleted_at = utcnow()
             return len(profiles)
 
+    async def cleanup_expired_payment_data(self, older_than: datetime) -> int:
+        """Remove an expired payment journal and scrub its order-side contact data."""
+        async with self.sessions() as session, session.begin():
+            payments = list(
+                (
+                    await session.scalars(
+                        select(Payment).where(Payment.received_at < older_than)
+                    )
+                ).all()
+            )
+            if not payments:
+                return 0
+
+            payment_ids = [payment.id for payment in payments]
+            order_ids = [payment.order_id for payment in payments]
+            await session.execute(
+                update(Order)
+                .where(Order.id.in_(order_ids))
+                .values(
+                    provider_invoice_uuid=None,
+                    payment_url=None,
+                    receipt_email_encrypted="expired",
+                    refund_confirmation_hash=None,
+                    refund_confirmation_expires_at=None,
+                )
+            )
+            await session.execute(delete(Payment).where(Payment.id.in_(payment_ids)))
+            return len(payment_ids)
+
     async def delete_personal_data(self, telegram_id: int) -> list[str] | None:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
         async with self.sessions() as session, session.begin():

@@ -30,13 +30,20 @@ logger = logging.getLogger(__name__)
 async def maintenance(store: Store, settings: Settings) -> None:
     while True:
         try:
+            now = datetime.now(UTC)
+            draft_cutoff = now - timedelta(days=settings.profile_draft_retention_days)
+            await store.cleanup_expired_drafts(draft_cutoff)
+            if settings.payment_retention_days > 0:
+                payment_cutoff = now - timedelta(days=settings.payment_retention_days)
+                await store.cleanup_expired_payment_data(payment_cutoff)
+        except Exception:
+            logger.exception("data retention maintenance failed")
+        try:
             await store.refresh_refunds()
-            cutoff = datetime.now(UTC) - timedelta(days=settings.profile_draft_retention_days)
-            await store.cleanup_expired_drafts(cutoff)
         except RobokassaError:
             logger.warning("payment maintenance request failed")
         except Exception:
-            logger.exception("maintenance iteration failed")
+            logger.exception("refund maintenance failed")
         await asyncio.sleep(3600)
 
 

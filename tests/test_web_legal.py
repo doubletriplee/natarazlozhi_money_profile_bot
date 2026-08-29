@@ -14,7 +14,11 @@ from money_profile_bot.web.app import create_web_app
 
 @pytest.mark.asyncio
 async def test_fake_mode_legal_pages_disclose_that_no_purchase_occurs() -> None:
-    settings = Settings(payment_mode=PaymentMode.FAKE, _env_file=None)
+    settings = Settings(
+        payment_mode=PaymentMode.FAKE,
+        payment_retention_days=30,
+        _env_file=None,
+    )
     app = create_web_app(
         settings,
         cast(Store, AsyncMock()),
@@ -30,6 +34,7 @@ async def test_fake_mode_legal_pages_disclose_that_no_purchase_occurs() -> None:
 
     assert "списание денег не производится" in privacy
     assert "Платёжный оператор в тестовом сценарии не используется" in privacy
+    assert "Тестовая запись об открытии результата удаляется через 30 дней" in privacy
     assert "не сохраняет\nподтверждение совершеннолетия" in privacy
     assert "деньги не списываются" in terms
     assert "покупка и обязанность оплаты не возникают" in terms

@@ -72,6 +72,12 @@ def create_web_app(
                 "Telegram используется как платформа общения, хостинг — для работы приложения. "
                 "Платёжный оператор в тестовом сценарии не используется."
             )
+            payment_retention = (
+                "Тестовая запись об открытии результата удаляется через "
+                f"{settings.payment_retention_days or '[срок не утверждён]'} дней. После удаления "
+                "сохраняется только минимальный статус заказа, необходимый для повторного доступа "
+                "к уже выданному результату."
+            )
         else:
             payment_data = (
                 "Перед созданием платёжного счёта запрашивается email для электронного чека. "
@@ -80,6 +86,11 @@ def create_web_app(
             providers = (
                 "Telegram используется как платформа общения, хостинг — для работы приложения, "
                 "Robokassa — для приёма платежа и формирования электронного чека."
+            )
+            payment_retention = (
+                "Техническая платёжная запись и контактные данные удаляются через "
+                f"{settings.payment_retention_days or '[срок не утверждён]'} дней. После удаления "
+                "сохраняются минимальные сведения о заказе и его статусе."
             )
         body = f"""
 <p class="meta">Версия документа: {html.escape(settings.legal_docs_version)}</p>
@@ -92,7 +103,7 @@ def create_web_app(
 <h2>Получатели</h2><p>{html.escape(providers)}</p>
 <h2>Хранение и защита</h2><p>Персональные поля шифруются. Неоплаченные анкеты удаляются через
 {settings.profile_draft_retention_days} дней. Резервные копии хранятся {settings.backup_retention_days} дней.
-Минимальный платёжный журнал хранится {settings.payment_retention_days or "[срок не утверждён]"} дней.</p>
+{html.escape(payment_retention)}</p>
 <h2>Права пользователя</h2><p>Удалить исходные данные и результаты можно
 командой <code>/delete_my_data</code>. Вопросы направляются на {email} или
 <a href="https://t.me/{html.escape(settings.support_username)}">@{html.escape(settings.support_username)}</a>.</p>
