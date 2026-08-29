@@ -55,7 +55,7 @@ PUBLIC_TEST_COMMANDS = frozenset(
 )
 
 
-class TestAccessMiddleware(BaseMiddleware):
+class ClosedTestAccessMiddleware(BaseMiddleware):
     def __init__(self, allowed_ids: frozenset[int]) -> None:
         self.allowed_ids = allowed_ids
 
@@ -317,7 +317,7 @@ def build_router(
     delivery: DeliveryWorker,
 ) -> Router:
     router = Router(name="money-profile")
-    access_middleware = TestAccessMiddleware(settings.test_access_ids)
+    access_middleware = ClosedTestAccessMiddleware(settings.test_access_ids)
     router.message.outer_middleware(access_middleware)
     router.callback_query.outer_middleware(access_middleware)
 

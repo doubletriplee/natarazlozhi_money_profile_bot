@@ -10,7 +10,7 @@ import pytest
 from aiogram.types import Chat, Message, User
 
 from money_profile_bot.bot.router import (
-    TestAccessMiddleware,
+    ClosedTestAccessMiddleware,
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
@@ -145,7 +145,7 @@ def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
 
 @pytest.mark.asyncio
 async def test_closed_test_middleware_blocks_non_member_but_keeps_legal_commands() -> None:
-    middleware = TestAccessMiddleware(frozenset({10001}))
+    middleware = ClosedTestAccessMiddleware(frozenset({10001}))
     handler = AsyncMock(return_value="allowed")
     user = User(id=20002, is_bot=False, first_name="Test")
     start = Message(
