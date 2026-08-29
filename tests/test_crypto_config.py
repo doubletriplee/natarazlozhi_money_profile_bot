@@ -38,6 +38,7 @@ def test_development_settings_generate_keys() -> None:
     settings = Settings(_env_file=None)
     assert settings.product_price_minor == 14900
     assert settings.payment_mode is PaymentMode.FAKE
+    assert settings.payment_retention_days == 30
     assert settings.app_encryption_key
     assert settings.lookup_hmac_key
 

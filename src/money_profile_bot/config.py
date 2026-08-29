@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     operator_name: str = ""
     operator_inn: str = ""
     operator_email: str = ""
-    payment_retention_days: int = Field(default=0, ge=0)
+    payment_retention_days: int = Field(default=30, ge=0)
     profile_draft_retention_days: int = Field(default=30, ge=1)
     backup_retention_days: int = Field(default=14, ge=1)
 
