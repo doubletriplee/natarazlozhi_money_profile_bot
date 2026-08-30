@@ -10,7 +10,13 @@ from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.robokassa import RobokassaClient
 from money_profile_bot.services.store import Store
-from money_profile_bot.web.legal import consent_body, performer_body, privacy_body, terms_body
+from money_profile_bot.web.legal import (
+    consent_body,
+    performer_body,
+    performer_bot_username,
+    privacy_body,
+    terms_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +45,7 @@ def _price(value: Decimal) -> str:
 
 
 def _home_page(settings: Settings) -> str:
-    bot_username = html.escape(settings.bot_username)
+    bot_username = html.escape(performer_bot_username(settings))
     bot_url = f"https://t.me/{bot_username}"
     first_price = _price(settings.product_price_rub)
     test_notice = ""

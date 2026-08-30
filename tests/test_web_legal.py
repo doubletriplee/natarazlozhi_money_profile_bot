@@ -51,10 +51,15 @@ async def test_home_page_describes_products_delivery_operator_and_legal_links() 
 @pytest.mark.asyncio
 async def test_home_page_reads_performer_details_from_terms_document(tmp_path: Path) -> None:
     (tmp_path / "terms_final.md").write_text(
-        "# Оферта\n\n## Реквизиты Исполнителя\n\n**Единый источник реквизитов**\nИНН: **123**\n",
+        "# Оферта\n\n## Реквизиты Исполнителя\n\n**Единый источник реквизитов**\n"
+        "ИНН: **123**\nTelegram-бот: **@canonical_public_bot**\n",
         encoding="utf-8",
     )
-    settings = Settings(legal_documents_directory=tmp_path, _env_file=None)
+    settings = Settings(
+        bot_username="runtime_test_bot",
+        legal_documents_directory=tmp_path,
+        _env_file=None,
+    )
     app = create_web_app(
         settings,
         cast(Store, AsyncMock()),
@@ -69,6 +74,8 @@ async def test_home_page_reads_performer_details_from_terms_document(tmp_path: P
     assert response.status == 200
     assert "Единый источник реквизитов" in body
     assert "Симоненко Наталья Сергеевна" not in body
+    assert body.count('href="https://t.me/canonical_public_bot"') == 4
+    assert "runtime_test_bot" not in body
 
 
 @pytest.mark.asyncio

@@ -87,7 +87,7 @@ def _document_body(settings: Settings, document: str) -> str:
     return _render_markdown(source)
 
 
-def performer_body(settings: Settings) -> str:
+def _performer_source(settings: Settings) -> str:
     filename = _DOCUMENT_FILES["terms"]
     path = settings.legal_documents_directory / filename
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -103,7 +103,18 @@ def performer_body(settings: Settings) -> str:
             section.append(line)
     if not section:
         raise ValueError("performer details are missing from the terms document")
-    return _render_markdown("\n".join(section))
+    return "\n".join(section)
+
+
+def performer_body(settings: Settings) -> str:
+    return _render_markdown(_performer_source(settings))
+
+
+def performer_bot_username(settings: Settings) -> str:
+    match = re.search(r"Telegram-бот:\s*\*\*@([A-Za-z0-9_]+)\*\*", _performer_source(settings))
+    if not match:
+        raise ValueError("public Telegram bot is missing from the performer details")
+    return match.group(1)
 
 
 def privacy_body(settings: Settings) -> str:
