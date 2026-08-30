@@ -29,6 +29,7 @@ from money_profile_bot.models import OrderStatus
 from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.avatar import (
     INTRO_CAPTION,
+    WELCOME_CAPTION,
     AvatarAssets,
     avatar_free_caption,
     sales_telegram_url,
@@ -40,6 +41,8 @@ from money_profile_bot.services.rules import generate_profile, validate_generate
 from money_profile_bot.services.store import ReminderButtons, Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+WELCOME_BUTTON_TEXT = "Старт"
+WELCOME_REMINDER_PROMPT = "Нажми «Старт», чтобы узнать свой Денежный аватар."
 CONSENT_BUTTON_TEXT = "Согласна, продолжить"
 CONSENT_REMINDER_PROMPT = (
     "Нажми «Согласна, продолжить», чтобы подтвердить согласие и перейти к анкете."
@@ -149,6 +152,11 @@ def _confirmation_text(data: dict[str, Any], selected: dict[str, Any]) -> str:
 
 
 def form_reminder_payload(state: str, data: dict[str, Any]) -> tuple[str, ReminderButtons] | None:
+    if state == ProfileForm.welcome.state:
+        return (
+            WELCOME_REMINDER_PROMPT,
+            (((WELCOME_BUTTON_TEXT, "welcome:start"),),),
+        )
     if state == ProfileForm.consent.state:
         return (
             CONSENT_REMINDER_PROMPT,
@@ -224,6 +232,10 @@ def _intro_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     )
 
 
+def _welcome_keyboard() -> InlineKeyboardMarkup:
+    return _keyboard((WELCOME_BUTTON_TEXT, "welcome:start"))
+
+
 def _sales_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -240,14 +252,26 @@ def _sales_keyboard(settings: Settings) -> InlineKeyboardMarkup:
 async def _begin(
     message: Message,
     state: FSMContext,
-    settings: Settings,
     avatars: AvatarAssets,
 ) -> None:
     await state.clear()
-    await state.set_state(ProfileForm.consent)
+    await state.set_state(ProfileForm.welcome)
     await message.answer_photo(
         FSInputFile(avatars.first_message_image()),
-        caption=INTRO_CAPTION,
+        caption=WELCOME_CAPTION,
+        reply_markup=_welcome_keyboard(),
+    )
+
+
+async def _show_consent(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+) -> None:
+    await state.clear()
+    await state.set_state(ProfileForm.consent)
+    await message.answer(
+        INTRO_CAPTION,
         reply_markup=_intro_keyboard(settings),
     )
 
@@ -336,11 +360,11 @@ def build_router(
         await _schedule_form_reminder(
             store,
             message.from_user.id,
-            state="consent",
-            text=CONSENT_REMINDER_PROMPT,
-            reply_markup=_intro_keyboard(settings),
+            state="welcome",
+            text=WELCOME_REMINDER_PROMPT,
+            reply_markup=_welcome_keyboard(),
         )
-        await _begin(message, state, settings, avatars)
+        await _begin(message, state, avatars)
         if newly_claimed_admin:
             await message.answer(
                 "Вы назначены администратором тестового бота. Команда статистики: /stats."
@@ -353,6 +377,20 @@ def build_router(
         if message.from_user:
             await store.cancel_form_reminder(message.from_user.id)
         await _request_data_deletion(message, state)
+
+    @router.callback_query(ProfileForm.welcome, F.data == "welcome:start")
+    async def welcome_start(callback: CallbackQuery, state: FSMContext) -> None:
+        await callback.answer()
+        await store.cancel_form_reminder(callback.from_user.id)
+        if isinstance(callback.message, Message):
+            await _schedule_form_reminder(
+                store,
+                callback.from_user.id,
+                state="consent",
+                text=CONSENT_REMINDER_PROMPT,
+                reply_markup=_intro_keyboard(settings),
+            )
+            await _show_consent(callback.message, state, settings)
 
     @router.callback_query(ProfileForm.consent, F.data == "consent:yes")
     async def consent(callback: CallbackQuery, state: FSMContext) -> None:
@@ -587,7 +625,7 @@ def build_router(
                 text=CONSENT_REMINDER_PROMPT,
                 reply_markup=_intro_keyboard(settings),
             )
-            await _begin(callback.message, state, settings, avatars)
+            await _show_consent(callback.message, state, settings)
 
     @router.callback_query(ProfileForm.confirm, F.data == "form:confirm")
     async def form_confirm(callback: CallbackQuery, state: FSMContext) -> None:

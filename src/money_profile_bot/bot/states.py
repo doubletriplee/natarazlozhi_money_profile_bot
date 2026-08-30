@@ -2,6 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class ProfileForm(StatesGroup):
+    welcome = State()
     consent = State()
     name = State()
     birth_date = State()

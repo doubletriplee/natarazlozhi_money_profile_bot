@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -19,7 +20,10 @@ from money_profile_bot.bot.router import (
     _request_data_deletion,
     _sales_keyboard,
     _send_free_avatar,
+    _show_consent,
+    _welcome_keyboard,
     build_router,
+    form_reminder_payload,
 )
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
 from money_profile_bot.config import Settings
@@ -31,6 +35,7 @@ from money_profile_bot.services.avatar import (
     INTRO_CAPTION,
     SALES_MESSAGE_TEXT,
     STRENGTH_OFFER_CAPTION,
+    WELCOME_CAPTION,
     AvatarAssets,
     avatar_free_caption,
     avatar_paid_caption,
@@ -47,9 +52,32 @@ REQUIRED_HEADINGS = (
 )
 
 
-def test_intro_copy_and_image_are_complete() -> None:
+def test_welcome_copy_and_image_match_start_screen() -> None:
     assets = AvatarAssets(ASSET_DIRECTORY)
-    assert assets.first_message_image().is_file()
+    image_path = assets.first_message_image()
+    assert image_path.is_file()
+    assert hashlib.sha256(image_path.read_bytes()).hexdigest() == (
+        "45fbc7fcb4341fbe1aaeff8b0bb0d29bd2ea8ee653a859edb28745a1ee096567"
+    )
+    assert (
+        WELCOME_CAPTION
+        == """<b>Что умеет этот бот?</b>
+🌟 Я определю твой Денежный аватар по дате, точному времени и месту рождения.
+
+Ты узнаешь, через что тебе легче зарабатывать, проявляться и продавать — и какие особенности твоей натальной карты влияют на отношения с деньгами.
+
+Это не гороскоп по знаку зодиака, а разбор твоей индивидуальной карты.
+
+💫 Денежный аватар — бесплатно.
+Внутри можно раскрыть его глубже: профессии, формат работы, проявленность, денежная ловушка и конкретный следующий шаг.
+Нажми «Старт» ✨"""
+    )
+    button = _welcome_keyboard().inline_keyboard[0][0]
+    assert button.text == "Старт"
+    assert button.callback_data == "welcome:start"
+
+
+def test_consent_copy_is_complete() -> None:
     assert INTRO_CAPTION.startswith("Узнай свой Денежный аватар 💫")
     assert "А кто ты среди них?" in INTRO_CAPTION
     assert "соглашаешься на обработку даты, времени и места рождения" in INTRO_CAPTION
@@ -141,6 +169,10 @@ def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
     buttons = _reminder_buttons(_intro_keyboard(Settings(_env_file=None)))
 
     assert buttons == ((("Согласна, продолжить", "consent:yes"),),)
+    assert form_reminder_payload(ProfileForm.welcome.state, {}) == (
+        "Нажми «Старт», чтобы узнать свой Денежный аватар.",
+        ((("Старт", "welcome:start"),),),
+    )
 
 
 @pytest.mark.asyncio
@@ -166,17 +198,35 @@ async def test_closed_test_middleware_blocks_non_member_but_keeps_legal_commands
 
 
 @pytest.mark.asyncio
-async def test_begin_sends_intro_photo_and_skips_age_gate() -> None:
+async def test_begin_sends_welcome_photo_and_start_button() -> None:
+    message = AsyncMock()
+    state = AsyncMock()
+    assets = AvatarAssets(ASSET_DIRECTORY)
+
+    await _begin(message, state, assets)
+
+    state.set_state.assert_awaited_once_with(ProfileForm.welcome)
+    kwargs = message.answer_photo.await_args.kwargs
+    assert kwargs["caption"] == WELCOME_CAPTION
+    buttons = kwargs["reply_markup"].inline_keyboard
+    assert len(buttons) == 1
+    assert buttons[0][0].text == "Старт"
+    assert buttons[0][0].callback_data == "welcome:start"
+
+
+@pytest.mark.asyncio
+async def test_start_button_opens_legal_consent_before_birth_data() -> None:
     message = AsyncMock()
     state = AsyncMock()
     settings = Settings(_env_file=None)
-    assets = AvatarAssets(ASSET_DIRECTORY)
 
-    await _begin(message, state, settings, assets)
+    await _show_consent(message, state, settings)
 
     state.set_state.assert_awaited_once_with(ProfileForm.consent)
-    kwargs = message.answer_photo.await_args.kwargs
-    assert kwargs["caption"] == INTRO_CAPTION
+    message.answer.assert_awaited_once()
+    args = message.answer.await_args.args
+    kwargs = message.answer.await_args.kwargs
+    assert args == (INTRO_CAPTION,)
     buttons = kwargs["reply_markup"].inline_keyboard
     assert buttons[1][0].text == "Текст согласия"
     assert buttons[1][0].url == f"{settings.public_base_url}/consent"
