@@ -87,6 +87,25 @@ def _document_body(settings: Settings, document: str) -> str:
     return _render_markdown(source)
 
 
+def performer_body(settings: Settings) -> str:
+    filename = _DOCUMENT_FILES["terms"]
+    path = settings.legal_documents_directory / filename
+    lines = path.read_text(encoding="utf-8").splitlines()
+    section: list[str] = []
+    in_section = False
+    for line in lines:
+        if line.startswith("## "):
+            if in_section:
+                break
+            in_section = line.endswith("Реквизиты Исполнителя")
+            continue
+        if in_section:
+            section.append(line)
+    if not section:
+        raise ValueError("performer details are missing from the terms document")
+    return _render_markdown("\n".join(section))
+
+
 def privacy_body(settings: Settings) -> str:
     return _document_body(settings, "privacy")
 
