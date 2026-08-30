@@ -40,12 +40,14 @@ async def test_fake_mode_legal_pages_disclose_that_no_purchase_occurs() -> None:
     assert "Симоненко Наталья Сергеевна" in privacy
     assert "026108860870" in privacy
     assert "natali.nata5689@mail.ru" in privacy
+    assert "Редакция от 30 августа 2026 года" in privacy
+    assert "REG.RU" in privacy
     assert "Robokassa в закрытом тесте не получает данные" in privacy
-    assert "30 дней" in privacy
-    assert "Отдельного согласия на рекламу пользователь не даёт" in privacy
+    assert "Сервис работает в закрытом тестовом режиме" in privacy
     assert "деньги не списываются" in terms
     assert "покупка и обязанность оплаты не возникают" in terms
     assert "Реальная продажа через бота отключена" in terms
-    assert "Согласна, продолжить" in consent
-    assert "Отдельное согласие на рекламную рассылку" in consent
-    assert "Подтверждение совершеннолетия не фиксируется" in consent
+    assert "Публичная оферта на оказание информационно-развлекательных услуг" in terms
+    assert "Согласен(а)" in consent
+    assert "Оно не означает принятия Публичной оферты" in consent
+    assert "деньги не списываются" in consent

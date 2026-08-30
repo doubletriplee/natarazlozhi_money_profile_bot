@@ -25,7 +25,9 @@ color:var(--text); font:16px/1.55 Inter,Arial,sans-serif }} main {{ max-width:76
 padding:48px; background:var(--surface); border:1px solid var(--border); border-radius:48px }}
 h1,h2 {{ font-family:"Liberation Serif",Georgia,serif; letter-spacing:-.025em; line-height:1.08 }}
 h1 {{ font-size:clamp(42px,8vw,72px); margin:0 0 32px }} h2 {{ margin-top:40px }} p,li {{ color:#d0d0d0 }}
-a {{ color:var(--accent) }} .meta {{ color:var(--muted); font-size:14px }} @media(max-width:700px) {{
+a {{ color:var(--accent) }} .meta {{ color:var(--muted); font-size:14px }}
+.notice {{ margin:0 0 40px; padding:24px; border-radius:24px; background:#1a1308 }}
+.notice h2 {{ margin:0 0 12px; color:#f0bd66 }} .notice p {{ margin:0 }} @media(max-width:700px) {{
 main {{ margin:16px; padding:28px 24px; border-radius:24px }} }}
 </style></head><body><main><h1>{html.escape(title)}</h1>{body}</main></body></html>"""
 
@@ -62,13 +64,18 @@ def create_web_app(
 
     async def privacy(_: web.Request) -> web.Response:
         return web.Response(
-            text=_page("Политика обработки персональных данных", privacy_body(settings)),
+            text=_page(
+                "Политика в отношении обработки персональных данных", privacy_body(settings)
+            ),
             content_type="text/html",
         )
 
     async def terms(_: web.Request) -> web.Response:
         return web.Response(
-            text=_page("Условия использования", terms_body(settings)),
+            text=_page(
+                "Публичная оферта на оказание информационно-развлекательных услуг",
+                terms_body(settings),
+            ),
             content_type="text/html",
         )
 

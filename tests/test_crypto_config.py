@@ -39,7 +39,7 @@ def test_development_settings_generate_keys() -> None:
     assert settings.product_price_minor == 14900
     assert settings.payment_mode is PaymentMode.FAKE
     assert settings.payment_retention_days == 30
-    assert settings.legal_docs_version == "2026-08-29.1"
+    assert settings.legal_docs_version == "2026-08-30.1"
     assert settings.operator_name == "Симоненко Наталья Сергеевна"
     assert settings.operator_inn == "026108860870"
     assert settings.operator_email == "natali.nata5689@mail.ru"

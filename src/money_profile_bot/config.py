@@ -60,12 +60,13 @@ class Settings(BaseSettings):
     card_output_directory: Path = Path("runtime/cards")
     avatar_asset_directory: Path = Path("assets/avatars")
     pdf_output_directory: Path = Path("runtime/pdfs")
+    legal_documents_directory: Path = Path("юридические документы")
 
     public_base_url: str = "https://money.natarazlozhi.ru"
     source_repository_url: str = "https://github.com/doubletriplee/natarazlozhi_money_profile_bot"
     source_commit: str = "development"
 
-    legal_docs_version: str = "2026-08-29.1"
+    legal_docs_version: str = "2026-08-30.1"
     methodology_approved: bool = True
     golden_cards_approved: bool = False
     operator_name: str = "Симоненко Наталья Сергеевна"

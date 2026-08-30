@@ -15,15 +15,13 @@ from money_profile_bot.bot.router import (
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
+    _delete_start_command,
     _intro_keyboard,
     _reminder_buttons,
     _request_data_deletion,
     _sales_keyboard,
     _send_free_avatar,
-    _show_consent,
-    _welcome_keyboard,
     build_router,
-    form_reminder_payload,
 )
 from money_profile_bot.bot.states import DeleteForm, ProfileForm
 from money_profile_bot.config import Settings
@@ -35,7 +33,6 @@ from money_profile_bot.services.avatar import (
     INTRO_CAPTION,
     SALES_MESSAGE_TEXT,
     STRENGTH_OFFER_CAPTION,
-    WELCOME_CAPTION,
     AvatarAssets,
     avatar_free_caption,
     avatar_paid_caption,
@@ -52,35 +49,15 @@ REQUIRED_HEADINGS = (
 )
 
 
-def test_welcome_copy_and_image_match_start_screen() -> None:
+def test_intro_copy_and_image_are_complete() -> None:
     assets = AvatarAssets(ASSET_DIRECTORY)
     image_path = assets.first_message_image()
     assert image_path.is_file()
     assert hashlib.sha256(image_path.read_bytes()).hexdigest() == (
-        "45fbc7fcb4341fbe1aaeff8b0bb0d29bd2ea8ee653a859edb28745a1ee096567"
+        "8ecd2ac85627a2689b2d5718fd03fc76c282615aa24266a50a6bc0ef648e1ab1"
     )
-    assert (
-        WELCOME_CAPTION
-        == """<b>Что умеет этот бот?</b>
-🌟 Я определю твой Денежный аватар по дате, точному времени и месту рождения.
-
-Ты узнаешь, через что тебе легче зарабатывать, проявляться и продавать — и какие особенности твоей натальной карты влияют на отношения с деньгами.
-
-Это не гороскоп по знаку зодиака, а разбор твоей индивидуальной карты.
-
-💫 Денежный аватар — бесплатно.
-Внутри можно раскрыть его глубже: профессии, формат работы, проявленность, денежная ловушка и конкретный следующий шаг.
-Нажми «Старт» ✨"""
-    )
-    button = _welcome_keyboard().inline_keyboard[0][0]
-    assert button.text == "Старт"
-    assert button.callback_data == "welcome:start"
-
-
-def test_consent_copy_is_complete() -> None:
     assert INTRO_CAPTION.startswith("Узнай свой Денежный аватар 💫")
     assert "А кто ты среди них?" in INTRO_CAPTION
-    assert "соглашаешься на обработку даты, времени и места рождения" in INTRO_CAPTION
     assert "не является финансовой рекомендацией" in INTRO_CAPTION
     assert "Мой авторский метод, который покажет" in INTRO_CAPTION
     assert (
@@ -168,11 +145,7 @@ def test_birth_date_validation_has_no_adult_age_gate() -> None:
 def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
     buttons = _reminder_buttons(_intro_keyboard(Settings(_env_file=None)))
 
-    assert buttons == ((("Согласна, продолжить", "consent:yes"),),)
-    assert form_reminder_payload(ProfileForm.welcome.state, {}) == (
-        "Нажми «Старт», чтобы узнать свой Денежный аватар.",
-        ((("Старт", "welcome:start"),),),
-    )
+    assert buttons == ((("✅ Согласен(а), продолжить", "consent:yes"),),)
 
 
 @pytest.mark.asyncio
@@ -198,41 +171,39 @@ async def test_closed_test_middleware_blocks_non_member_but_keeps_legal_commands
 
 
 @pytest.mark.asyncio
-async def test_begin_sends_welcome_photo_and_start_button() -> None:
-    message = AsyncMock()
-    state = AsyncMock()
-    assets = AvatarAssets(ASSET_DIRECTORY)
-
-    await _begin(message, state, assets)
-
-    state.set_state.assert_awaited_once_with(ProfileForm.welcome)
-    kwargs = message.answer_photo.await_args.kwargs
-    assert kwargs["caption"] == WELCOME_CAPTION
-    buttons = kwargs["reply_markup"].inline_keyboard
-    assert len(buttons) == 1
-    assert buttons[0][0].text == "Старт"
-    assert buttons[0][0].callback_data == "welcome:start"
-
-
-@pytest.mark.asyncio
-async def test_start_button_opens_legal_consent_before_birth_data() -> None:
+async def test_begin_sends_intro_photo_with_four_legal_buttons() -> None:
     message = AsyncMock()
     state = AsyncMock()
     settings = Settings(_env_file=None)
+    assets = AvatarAssets(ASSET_DIRECTORY)
 
-    await _show_consent(message, state, settings)
+    await _begin(message, state, settings, assets)
 
     state.set_state.assert_awaited_once_with(ProfileForm.consent)
-    message.answer.assert_awaited_once()
-    args = message.answer.await_args.args
-    kwargs = message.answer.await_args.kwargs
-    assert args == (INTRO_CAPTION,)
+    kwargs = message.answer_photo.await_args.kwargs
+    assert kwargs["caption"] == INTRO_CAPTION
     buttons = kwargs["reply_markup"].inline_keyboard
-    assert buttons[1][0].text == "Текст согласия"
-    assert buttons[1][0].url == f"{settings.public_base_url}/consent"
-    assert buttons[-1][0].text == "Согласна, продолжить"
+    assert [row[0].text for row in buttons] == [
+        "🔒 Политика обработки данных",
+        "📜 Публичная оферта",
+        "✍️ Согласие на обработку",
+        "✅ Согласен(а), продолжить",
+    ]
+    assert buttons[0][0].url == f"{settings.public_base_url}/privacy"
+    assert buttons[1][0].url == f"{settings.public_base_url}/terms"
+    assert buttons[2][0].url == f"{settings.public_base_url}/consent"
+    assert buttons[3][0].callback_data == "consent:yes"
     assert not hasattr(ProfileForm, "adult")
     assert not hasattr(ProfileForm, "email")
+
+
+@pytest.mark.asyncio
+async def test_start_command_is_deleted_from_private_chat() -> None:
+    message = AsyncMock()
+
+    await _delete_start_command(message)
+
+    message.delete.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
