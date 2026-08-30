@@ -40,7 +40,6 @@ class Settings(BaseSettings):
     telegram_proxy_url: str = ""
     support_username: str = "simnatali"
     admin_telegram_ids: str = ""
-    test_access_telegram_ids: str = ""
     bootstrap_admin_on_first_start: bool = False
     product_price_rub: Decimal = Field(default=Decimal("149.00"), gt=0)
     payment_mode: PaymentMode = PaymentMode.FAKE
@@ -101,13 +100,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_runtime_safety(self) -> Settings:
         if self.app_env is Environment.TEST:
-            invalid: list[str] = []
             if self.payment_mode is not PaymentMode.FAKE:
-                invalid.append("PAYMENT_MODE=fake")
-            if not self.test_access_ids:
-                invalid.append("TEST_ACCESS_TELEGRAM_IDS")
-            if invalid:
-                raise ValueError("test configuration is incomplete: " + ", ".join(invalid))
+                raise ValueError("test configuration is incomplete: PAYMENT_MODE=fake")
 
         if self.app_env is not Environment.PRODUCTION:
             self.app_encryption_key = self.app_encryption_key or _development_key("data")
@@ -165,10 +159,6 @@ class Settings(BaseSettings):
     @property
     def admin_ids(self) -> frozenset[int]:
         return self._parse_id_list(self.admin_telegram_ids)
-
-    @property
-    def test_access_ids(self) -> frozenset[int]:
-        return self._parse_id_list(self.test_access_telegram_ids)
 
     @staticmethod
     def _parse_id_list(raw: str) -> frozenset[int]:

@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from aiogram.types import Chat, Message, User
 
 from money_profile_bot.bot.router import (
-    ClosedTestAccessMiddleware,
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
@@ -129,7 +127,7 @@ def test_sales_link_prefills_exact_message() -> None:
 
 def test_strength_offer_has_practical_transition_paragraph() -> None:
     assert "Твой денежный шаг уже сегодня\n\nХочешь понять" in STRENGTH_OFFER_CAPTION
-    assert "<b>Закрытый тест:</b>" in STRENGTH_OFFER_CAPTION
+    assert "<b>Тестовый режим оплаты:</b>" in STRENGTH_OFFER_CAPTION
     assert STRENGTH_OFFER_CAPTION.endswith("открывает разбор без списания денег.")
     assert len(STRENGTH_OFFER_CAPTION) <= 1024
 
@@ -146,28 +144,6 @@ def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
     buttons = _reminder_buttons(_intro_keyboard(Settings(_env_file=None)))
 
     assert buttons == ((("✅ Согласен(а), продолжить", "consent:yes"),),)
-
-
-@pytest.mark.asyncio
-async def test_closed_test_middleware_blocks_non_member_but_keeps_legal_commands() -> None:
-    middleware = ClosedTestAccessMiddleware(frozenset({10001}))
-    handler = AsyncMock(return_value="allowed")
-    user = User(id=20002, is_bot=False, first_name="Test")
-    start = Message(
-        message_id=1,
-        date=datetime.now(UTC),
-        chat=Chat(id=20002, type="private"),
-        from_user=user,
-        text="/start",
-    )
-    privacy = start.model_copy(update={"message_id": 2, "text": "/privacy"})
-
-    with patch.object(Message, "answer", new_callable=AsyncMock) as answer:
-        assert await middleware(handler, start, {}) is None
-        answer.assert_awaited_once_with("Тестовый бот доступен только участникам закрытого теста.")
-
-    assert await middleware(handler, privacy, {}) == "allowed"
-    handler.assert_awaited_once_with(privacy, {})
 
 
 @pytest.mark.asyncio

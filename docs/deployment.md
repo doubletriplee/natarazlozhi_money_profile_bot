@@ -4,12 +4,12 @@
 с read-only root filesystem, без Linux capabilities, с лимитом 0,5 CPU и 384 МБ RAM. HTTP опубликован
 только на `127.0.0.1:18080`.
 
-## Закрытый тест
+## Публичный тест без оплаты
 
 1. Скопировать `compose.yaml`, создать `runtime/data`, положить GeoNames DB в
    `runtime/data/cities.sqlite3` и дать каталог UID 10001.
 2. Создать `.env` с правами `600` на основе `.env.test.example` и обязательно установить
-   `APP_ENV=test`, `PAYMENT_MODE=fake`, список тестировщиков и срок хранения 30 дней.
+   `APP_ENV=test`, `PAYMENT_MODE=fake` и срок хранения 30 дней. Бот доступен всем пользователям.
 3. Установить Caddy-файл из `deploy/` в существующий `sites-enabled`, выполнить `caddy validate`.
 4. Запустить образ по точному commit SHA из GHCR и проверить `/healthz`, `/privacy`, `/consent`,
    `/terms`, `/source`.
