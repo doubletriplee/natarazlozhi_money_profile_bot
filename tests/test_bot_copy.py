@@ -13,6 +13,8 @@ from money_profile_bot.bot.router import (
     _accept_consent,
     _begin,
     _birth_date_is_plausible,
+    _birth_date_picker,
+    _birth_time_picker,
     _delete_start_command,
     _intro_keyboard,
     _reminder_buttons,
@@ -140,6 +142,85 @@ def test_birth_date_validation_has_no_adult_age_gate() -> None:
     assert not _birth_date_is_plausible(date(1900, 1, 1), today=today)
 
 
+def test_birth_date_picker_covers_valid_range_and_calendar_days() -> None:
+    today = date(2026, 8, 30)
+
+    prompt, decades = _birth_date_picker({}, today=today)
+    assert prompt.startswith("📅 Когда ты родилась?")
+    decade_buttons = [button for row in decades.inline_keyboard for button in row]
+    assert decade_buttons[0].text == "1900-е"
+    assert decade_buttons[0].callback_data == "birth_date:decade:1900"
+    assert decade_buttons[-2].text == "2020-е"
+    assert decade_buttons[-1].callback_data == "form:cancel"
+
+    _, first_years = _birth_date_picker(
+        {"birth_date_step": "year", "birth_decade": 1900}, today=today
+    )
+    assert [button.text for row in first_years.inline_keyboard[:-2] for button in row] == [
+        "1906",
+        "1907",
+        "1908",
+        "1909",
+    ]
+
+    _, current_months = _birth_date_picker(
+        {"birth_date_step": "month", "birth_year": 2026}, today=today
+    )
+    assert [button.text for row in current_months.inline_keyboard[:-2] for button in row] == [
+        "янв",
+        "фев",
+        "мар",
+        "апр",
+        "май",
+        "июн",
+        "июл",
+        "авг",
+    ]
+
+    _, current_days = _birth_date_picker(
+        {"birth_date_step": "day", "birth_year": 2026, "birth_month": 8}, today=today
+    )
+    assert [button.text for row in current_days.inline_keyboard[:-2] for button in row][-1] == "30"
+
+    _, leap_days = _birth_date_picker(
+        {"birth_date_step": "day", "birth_year": 2024, "birth_month": 2}, today=today
+    )
+    assert [button.text for row in leap_days.inline_keyboard[:-2] for button in row][-1] == "29"
+
+
+def test_birth_time_picker_uses_hour_range_and_exact_minute_buttons() -> None:
+    prompt, hours = _birth_time_picker({"time_precision": "exact"})
+    assert prompt.startswith("🕐 Во сколько ты родилась?")
+    hour_buttons = [button for row in hours.inline_keyboard[:-2] for button in row]
+    assert [button.text for button in hour_buttons] == [f"{hour:02d}" for hour in range(24)]
+
+    prompt, ranges = _birth_time_picker(
+        {"birth_time_step": "minute_range", "birth_hour": 23, "time_precision": "exact"}
+    )
+    assert prompt == "🕐 Час: 23 — выбери диапазон минут:"
+    assert [button.text for row in ranges.inline_keyboard[:-2] for button in row] == [
+        "23:00–09",
+        "23:10–19",
+        "23:20–29",
+        "23:30–39",
+        "23:40–49",
+        "23:50–59",
+    ]
+
+    prompt, minutes = _birth_time_picker(
+        {
+            "birth_time_step": "minute",
+            "birth_hour": 23,
+            "birth_minute_start": 40,
+            "time_precision": "exact",
+        }
+    )
+    assert prompt == "🕐 23:40–49 — выбери точную минуту:"
+    assert [button.text for row in minutes.inline_keyboard[:-2] for button in row] == [
+        f"23:{minute:02d}" for minute in range(40, 50)
+    ]
+
+
 def test_form_reminder_keeps_callback_buttons_and_drops_url_rows() -> None:
     buttons = _reminder_buttons(_intro_keyboard(Settings(_env_file=None)))
 
@@ -193,14 +274,21 @@ async def test_consent_skips_name_and_requests_birth_date() -> None:
     await _accept_consent(callback, state, settings, store)
 
     store.save_consent.assert_awaited_once_with(123456, settings.legal_docs_version)
-    store.schedule_form_reminder.assert_awaited_once_with(
-        123456,
-        state="birth_date",
-        text="Введи дату рождения в формате ДД.ММ.ГГГГ.",
-        buttons=(),
+    state.update_data.assert_awaited_once_with(
+        birth_date_step="decade",
+        birth_decade=None,
+        birth_year=None,
+        birth_month=None,
     )
+    reminder = store.schedule_form_reminder.await_args
+    assert reminder.args == (123456,)
+    assert reminder.kwargs["state"] == "birth_date"
+    assert reminder.kwargs["text"].startswith("📅 Когда ты родилась?")
+    assert reminder.kwargs["buttons"][0][0][1].startswith("birth_date:decade:")
     state.set_state.assert_awaited_once_with(ProfileForm.birth_date)
-    callback.message.answer.assert_awaited_once_with("Введи дату рождения в формате ДД.ММ.ГГГГ.")
+    answer = callback.message.answer.await_args
+    assert answer.args[0].startswith("📅 Когда ты родилась?")
+    assert answer.kwargs["reply_markup"].inline_keyboard
     assert all("Как тебя зовут?" not in str(call) for call in callback.mock_calls)
 
 
@@ -248,6 +336,77 @@ def test_delete_command_has_priority_over_profile_form_answers() -> None:
 
     assert profile_state_indexes
     assert delete_index < min(profile_state_indexes)
+
+
+@pytest.mark.asyncio
+async def test_birth_date_button_saves_date_and_opens_time_precision() -> None:
+    store = AsyncMock()
+    router = build_router(
+        Settings(_env_file=None),
+        store,
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "birth_date_choice"
+    )
+    callback = AsyncMock()
+    callback.data = "birth_date:day:1996:2:8"
+    callback.from_user.id = 123456
+    callback.message = None
+    state = AsyncMock()
+
+    await handler(callback, state)
+
+    state.update_data.assert_awaited_once_with(
+        birth_date="1996-02-08",
+        birth_date_step=None,
+        birth_decade=None,
+        birth_year=None,
+        birth_month=None,
+    )
+    state.set_state.assert_awaited_once_with(ProfileForm.time_precision)
+    reminder = store.schedule_form_reminder.await_args
+    assert reminder.kwargs["state"] == "time_precision"
+    assert reminder.kwargs["buttons"][0][0] == ("Знаю точно", "precision:exact")
+
+
+@pytest.mark.asyncio
+async def test_birth_time_button_saves_exact_minute_and_opens_city() -> None:
+    store = AsyncMock()
+    router = build_router(
+        Settings(_env_file=None),
+        store,
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "birth_time_choice"
+    )
+    callback = AsyncMock()
+    callback.data = "birth_time:minute:23:45"
+    callback.from_user.id = 123456
+    callback.message = None
+    state = AsyncMock()
+
+    await handler(callback, state)
+
+    state.update_data.assert_awaited_once_with(
+        birth_time="23:45:00",
+        birth_time_step=None,
+        birth_hour=None,
+        birth_minute_start=None,
+    )
+    state.set_state.assert_awaited_once_with(ProfileForm.city)
+    reminder = store.schedule_form_reminder.await_args
+    assert reminder.kwargs["state"] == "city"
+    assert reminder.kwargs["text"].startswith("Введи только город рождения")
 
 
 @pytest.mark.asyncio

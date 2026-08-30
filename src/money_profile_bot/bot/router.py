@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import html
 import re
 from contextlib import suppress
@@ -44,12 +45,44 @@ CONSENT_BUTTON_TEXT = "✅ Согласен(а), продолжить"
 CONSENT_REMINDER_PROMPT = (
     "Нажми «Согласен(а), продолжить», чтобы подтвердить согласие и перейти к анкете."
 )
-BIRTH_DATE_PROMPT = "Введи дату рождения в формате ДД.ММ.ГГГГ."
+BIRTH_DATE_PROMPT = "📅 Когда ты родилась?\nВыбери дату кнопками. Сначала выбери десятилетие."
 TIME_PRECISION_PROMPT = "Насколько точно известно время рождения?"
 CITY_PROMPT = (
     "Введи только город рождения, например: Москва. Страну писать не нужно — "
     "если найдётся несколько городов, я покажу варианты с регионом и страной."
 )
+
+MONTH_SHORT_NAMES = (
+    "",
+    "янв",
+    "фев",
+    "мар",
+    "апр",
+    "май",
+    "июн",
+    "июл",
+    "авг",
+    "сен",
+    "окт",
+    "ноя",
+    "дек",
+)
+MONTH_GENITIVE_NAMES = (
+    "",
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+CANCEL_BUTTON = ("✖ Отменить", "form:cancel")
 
 
 def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
@@ -57,6 +90,170 @@ def _keyboard(*rows: tuple[str, str]) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text=text, callback_data=data)] for text, data in rows
         ]
+    )
+
+
+def _grid_keyboard(
+    buttons: list[tuple[str, str]],
+    *,
+    columns: int,
+    footer: tuple[tuple[str, str], ...] = (),
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text=text, callback_data=data)
+            for text, data in buttons[index : index + columns]
+        ]
+        for index in range(0, len(buttons), columns)
+    ]
+    rows.extend([InlineKeyboardButton(text=text, callback_data=data)] for text, data in footer)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _birth_year_bounds(*, today: date | None = None) -> tuple[int, int]:
+    reference = today or date.today()
+    return reference.year - 120, reference.year
+
+
+def _birth_date_picker(
+    data: dict[str, Any], *, today: date | None = None
+) -> tuple[str, InlineKeyboardMarkup]:
+    reference = today or date.today()
+    first_year, last_year = _birth_year_bounds(today=reference)
+    step = data.get("birth_date_step", "decade")
+
+    if step == "year" and isinstance(data.get("birth_decade"), int):
+        decade = data["birth_decade"]
+        years = range(max(decade, first_year), min(decade + 9, last_year) + 1)
+        buttons = [(str(year), f"birth_date:year:{year}") for year in years]
+        return (
+            "📅 Выбери год рождения:",
+            _grid_keyboard(
+                buttons,
+                columns=5,
+                footer=(("‹ К десятилетиям", "birth_date:back:decades"), CANCEL_BUTTON),
+            ),
+        )
+
+    if step == "month" and isinstance(data.get("birth_year"), int):
+        year = data["birth_year"]
+        last_month = reference.month if year == reference.year else 12
+        buttons = [
+            (MONTH_SHORT_NAMES[month], f"birth_date:month:{year}:{month}")
+            for month in range(1, last_month + 1)
+        ]
+        return (
+            f"📅 Год: {year} — выбери месяц:",
+            _grid_keyboard(
+                buttons,
+                columns=4,
+                footer=(("‹ Год", f"birth_date:back:years:{year // 10 * 10}"), CANCEL_BUTTON),
+            ),
+        )
+
+    if (
+        step == "day"
+        and isinstance(data.get("birth_year"), int)
+        and isinstance(data.get("birth_month"), int)
+    ):
+        year = data["birth_year"]
+        month = data["birth_month"]
+        last_day = calendar.monthrange(year, month)[1]
+        if year == reference.year and month == reference.month:
+            last_day = min(last_day, reference.day)
+        buttons = [
+            (str(day), f"birth_date:day:{year}:{month}:{day}") for day in range(1, last_day + 1)
+        ]
+        return (
+            "📅 Выбери день:",
+            _grid_keyboard(
+                buttons,
+                columns=7,
+                footer=(("‹ Месяц", f"birth_date:back:months:{year}"), CANCEL_BUTTON),
+            ),
+        )
+
+    first_decade = first_year // 10 * 10
+    last_decade = last_year // 10 * 10
+    buttons = [
+        (f"{decade}-е", f"birth_date:decade:{decade}")
+        for decade in range(first_decade, last_decade + 1, 10)
+    ]
+    return (
+        BIRTH_DATE_PROMPT,
+        _grid_keyboard(buttons, columns=3, footer=(CANCEL_BUTTON,)),
+    )
+
+
+def _time_precision_keyboard() -> InlineKeyboardMarkup:
+    return _grid_keyboard(
+        [
+            ("Знаю точно", "precision:exact"),
+            ("Знаю примерно", "precision:approximate"),
+            ("Не знаю", "precision:unknown"),
+        ],
+        columns=1,
+        footer=(CANCEL_BUTTON,),
+    )
+
+
+def _birth_time_picker(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
+    step = data.get("birth_time_step", "hour")
+    precision = data.get("time_precision")
+    warning = (
+        "\nВ домах карты возможна неточность."
+        if precision == TimePrecision.APPROXIMATE.value
+        else ""
+    )
+
+    if step == "minute_range" and isinstance(data.get("birth_hour"), int):
+        hour = data["birth_hour"]
+        buttons = [
+            (f"{hour:02d}:{start:02d}–{start + 9:02d}", f"birth_time:range:{hour}:{start}")
+            for start in range(0, 60, 10)
+        ]
+        return (
+            f"🕐 Час: {hour:02d} — выбери диапазон минут:",
+            _grid_keyboard(
+                buttons,
+                columns=2,
+                footer=(("‹ Час", "birth_time:back:hours"), CANCEL_BUTTON),
+            ),
+        )
+
+    if (
+        step == "minute"
+        and isinstance(data.get("birth_hour"), int)
+        and isinstance(data.get("birth_minute_start"), int)
+    ):
+        hour = data["birth_hour"]
+        minute_start = data["birth_minute_start"]
+        buttons = [
+            (f"{hour:02d}:{minute:02d}", f"birth_time:minute:{hour}:{minute}")
+            for minute in range(minute_start, minute_start + 10)
+        ]
+        return (
+            f"🕐 {hour:02d}:{minute_start:02d}–{minute_start + 9:02d} — выбери точную минуту:",
+            _grid_keyboard(
+                buttons,
+                columns=5,
+                footer=(
+                    ("‹ К диапазонам минут", f"birth_time:back:ranges:{hour}"),
+                    CANCEL_BUTTON,
+                ),
+            ),
+        )
+
+    buttons = [(f"{hour:02d}", f"birth_time:hour:{hour}") for hour in range(24)]
+    return (
+        "🕐 Во сколько ты родилась? Выбери час.\n"
+        "Точное время может быть на бирке из роддома или его знает мама."
+        f"{warning}",
+        _grid_keyboard(
+            buttons,
+            columns=6,
+            footer=(("‹ К точности времени", "birth_time:back:precision"), CANCEL_BUTTON),
+        ),
     )
 
 
@@ -126,23 +323,14 @@ def form_reminder_payload(state: str, data: dict[str, Any]) -> tuple[str, Remind
             (((CONSENT_BUTTON_TEXT, "consent:yes"),),),
         )
     if state in {ProfileForm.name.state, ProfileForm.birth_date.state}:
-        return BIRTH_DATE_PROMPT, ()
+        text, keyboard = _birth_date_picker(data)
+        return text, _reminder_buttons(keyboard)
     if state == ProfileForm.time_precision.state:
-        return (
-            TIME_PRECISION_PROMPT,
-            (
-                (("Знаю точно", "precision:exact"),),
-                (("Знаю примерно", "precision:approximate"),),
-                (("Не знаю", "precision:unknown"),),
-            ),
-        )
+        keyboard = _time_precision_keyboard()
+        return TIME_PRECISION_PROMPT, _reminder_buttons(keyboard)
     if state == ProfileForm.birth_time.state:
-        warning = (
-            " В домах карты возможна неточность."
-            if data.get("time_precision") == TimePrecision.APPROXIMATE
-            else ""
-        )
-        return f"Введи время рождения в формате ЧЧ:ММ.{warning}", ()
+        text, keyboard = _birth_time_picker(data)
+        return text, _reminder_buttons(keyboard)
     if state == ProfileForm.city.state:
         return CITY_PROMPT, ()
     if state == ProfileForm.city_choice.state:
@@ -272,16 +460,24 @@ async def _accept_consent(
     if not callback.from_user:
         return
     await store.save_consent(callback.from_user.id, settings.legal_docs_version)
+    await state.update_data(
+        birth_date_step="decade",
+        birth_decade=None,
+        birth_year=None,
+        birth_month=None,
+    )
     await state.set_state(ProfileForm.birth_date)
     await callback.answer()
     if callback.message:
+        prompt, keyboard = _birth_date_picker({})
         await _schedule_form_reminder(
             store,
             callback.from_user.id,
             state="birth_date",
-            text=BIRTH_DATE_PROMPT,
+            text=prompt,
+            reply_markup=keyboard,
         )
-        await callback.message.answer(BIRTH_DATE_PROMPT)
+        await callback.message.answer(prompt, reply_markup=keyboard)
 
 
 async def _request_data_deletion(message: Message, state: FSMContext) -> None:
@@ -344,71 +540,167 @@ def build_router(
     # анкету без сохранения отправленного имени.
     @router.message(ProfileForm.name)
     async def legacy_name(message: Message, state: FSMContext) -> None:
+        await state.update_data(
+            birth_date_step="decade",
+            birth_decade=None,
+            birth_year=None,
+            birth_month=None,
+        )
         await state.set_state(ProfileForm.birth_date)
+        prompt, keyboard = _birth_date_picker({})
         if message.from_user:
             await _schedule_form_reminder(
                 store,
                 message.from_user.id,
                 state="birth_date",
-                text=BIRTH_DATE_PROMPT,
+                text=prompt,
+                reply_markup=keyboard,
             )
-        await message.answer(BIRTH_DATE_PROMPT)
+        await message.answer(prompt, reply_markup=keyboard)
+
+    @router.callback_query(ProfileForm.birth_date, F.data == "form:cancel")
+    @router.callback_query(ProfileForm.time_precision, F.data == "form:cancel")
+    @router.callback_query(ProfileForm.birth_time, F.data == "form:cancel")
+    async def cancel_form(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        await store.cancel_form_reminder(callback.from_user.id)
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(
+                "Анкета отменена. Чтобы начать заново, отправь /start."
+            )
 
     @router.message(ProfileForm.birth_date)
     async def birth_date(message: Message, state: FSMContext) -> None:
-        try:
-            value = datetime.strptime((message.text or "").strip(), "%d.%m.%Y").date()
-        except ValueError:
-            if message.from_user:
-                await _schedule_form_reminder(
-                    store,
-                    message.from_user.id,
-                    state="birth_date",
-                    text=BIRTH_DATE_PROMPT,
-                )
-            await message.answer("Не удалось прочитать дату. Используй формат ДД.ММ.ГГГГ.")
-            return
-        if not _birth_date_is_plausible(value):
-            if message.from_user:
-                await _schedule_form_reminder(
-                    store,
-                    message.from_user.id,
-                    state="birth_date",
-                    text=BIRTH_DATE_PROMPT,
-                )
-            await message.answer(
-                "Дата рождения не может быть в будущем. Проверь, правильно ли указан год."
-            )
-            return
-        await state.update_data(birth_date=value.isoformat())
-        await state.set_state(ProfileForm.time_precision)
-        keyboard = _keyboard(
-            ("Знаю точно", "precision:exact"),
-            ("Знаю примерно", "precision:approximate"),
-            ("Не знаю", "precision:unknown"),
-        )
+        data = await state.get_data()
+        prompt, keyboard = _birth_date_picker(data)
         if message.from_user:
             await _schedule_form_reminder(
                 store,
                 message.from_user.id,
-                state="time_precision",
-                text=TIME_PRECISION_PROMPT,
+                state="birth_date",
+                text=prompt,
                 reply_markup=keyboard,
             )
         await message.answer(
-            TIME_PRECISION_PROMPT,
+            "Дату не нужно вводить вручную — выбери её кнопками ниже.\n\n" + prompt,
             reply_markup=keyboard,
         )
+
+    @router.callback_query(ProfileForm.birth_date, F.data.startswith("birth_date:"))
+    async def birth_date_choice(callback: CallbackQuery, state: FSMContext) -> None:
+        parts = (callback.data or "").split(":")
+        first_year, last_year = _birth_year_bounds()
+        try:
+            action = parts[1]
+            if action == "decade":
+                decade = int(parts[2])
+                if decade % 10 or not (first_year // 10 * 10 <= decade <= last_year // 10 * 10):
+                    raise ValueError
+                await state.update_data(
+                    birth_date_step="year",
+                    birth_decade=decade,
+                    birth_year=None,
+                    birth_month=None,
+                )
+            elif action == "year":
+                year = int(parts[2])
+                if not first_year <= year <= last_year:
+                    raise ValueError
+                await state.update_data(
+                    birth_date_step="month",
+                    birth_decade=year // 10 * 10,
+                    birth_year=year,
+                    birth_month=None,
+                )
+            elif action == "month":
+                year, month = map(int, parts[2:4])
+                if not first_year <= year <= last_year or not 1 <= month <= 12:
+                    raise ValueError
+                if year == date.today().year and month > date.today().month:
+                    raise ValueError
+                await state.update_data(
+                    birth_date_step="day",
+                    birth_decade=year // 10 * 10,
+                    birth_year=year,
+                    birth_month=month,
+                )
+            elif action == "day":
+                year, month, day = map(int, parts[2:5])
+                value = date(year, month, day)
+                if not _birth_date_is_plausible(value):
+                    raise ValueError
+                await state.update_data(
+                    birth_date=value.isoformat(),
+                    birth_date_step=None,
+                    birth_decade=None,
+                    birth_year=None,
+                    birth_month=None,
+                )
+                await state.set_state(ProfileForm.time_precision)
+                keyboard = _time_precision_keyboard()
+                await _schedule_form_reminder(
+                    store,
+                    callback.from_user.id,
+                    state="time_precision",
+                    text=TIME_PRECISION_PROMPT,
+                    reply_markup=keyboard,
+                )
+                await callback.answer()
+                if isinstance(callback.message, Message):
+                    selected_date = f"{day} {MONTH_GENITIVE_NAMES[month]} {year}"
+                    await callback.message.edit_text(
+                        f"📅 Дата рождения: {selected_date}\n\n{TIME_PRECISION_PROMPT}",
+                        reply_markup=keyboard,
+                    )
+                return
+            elif action == "back" and parts[2] == "decades":
+                await state.update_data(
+                    birth_date_step="decade",
+                    birth_decade=None,
+                    birth_year=None,
+                    birth_month=None,
+                )
+            elif action == "back" and parts[2] == "years":
+                decade = int(parts[3])
+                await state.update_data(
+                    birth_date_step="year",
+                    birth_decade=decade,
+                    birth_year=None,
+                    birth_month=None,
+                )
+            elif action == "back" and parts[2] == "months":
+                year = int(parts[3])
+                await state.update_data(
+                    birth_date_step="month",
+                    birth_decade=year // 10 * 10,
+                    birth_year=year,
+                    birth_month=None,
+                )
+            else:
+                raise ValueError
+        except (IndexError, TypeError, ValueError):
+            await callback.answer("Вариант устарел. Выбери дату ещё раз.", show_alert=True)
+            return
+
+        data = await state.get_data()
+        prompt, keyboard = _birth_date_picker(data)
+        await _schedule_form_reminder(
+            store,
+            callback.from_user.id,
+            state="birth_date",
+            text=prompt,
+            reply_markup=keyboard,
+        )
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(prompt, reply_markup=keyboard)
 
     @router.callback_query(ProfileForm.time_precision, F.data.startswith("precision:"))
     async def precision(callback: CallbackQuery, state: FSMContext) -> None:
         value = (callback.data or "").split(":", 1)[1]
         if value not in {item.value for item in TimePrecision}:
-            keyboard = _keyboard(
-                ("Знаю точно", "precision:exact"),
-                ("Знаю примерно", "precision:approximate"),
-                ("Не знаю", "precision:unknown"),
-            )
+            keyboard = _time_precision_keyboard()
             await _schedule_form_reminder(
                 store,
                 callback.from_user.id,
@@ -420,58 +712,148 @@ def build_router(
             return
         await state.update_data(time_precision=value)
         await callback.answer()
-        if value == TimePrecision.UNKNOWN:
+        if value == TimePrecision.UNKNOWN.value:
             await state.update_data(birth_time=None)
             await state.set_state(ProfileForm.city)
-            if callback.message:
+            await _schedule_form_reminder(
+                store,
+                callback.from_user.id,
+                state="city",
+                text=CITY_PROMPT,
+            )
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text("🕐 Время рождения: не указано")
+                await callback.message.answer(CITY_PROMPT)
+        else:
+            await state.update_data(
+                birth_time_step="hour",
+                birth_hour=None,
+                birth_minute_start=None,
+            )
+            await state.set_state(ProfileForm.birth_time)
+            data = await state.get_data()
+            prompt, keyboard = _birth_time_picker(data)
+            await _schedule_form_reminder(
+                store,
+                callback.from_user.id,
+                state="birth_time",
+                text=prompt,
+                reply_markup=keyboard,
+            )
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(prompt, reply_markup=keyboard)
+
+    @router.message(ProfileForm.birth_time)
+    async def birth_time(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        prompt, keyboard = _birth_time_picker(data)
+        if message.from_user:
+            await _schedule_form_reminder(
+                store,
+                message.from_user.id,
+                state="birth_time",
+                text=prompt,
+                reply_markup=keyboard,
+            )
+        await message.answer(
+            "Время не нужно вводить вручную — выбери его кнопками ниже.\n\n" + prompt,
+            reply_markup=keyboard,
+        )
+
+    @router.callback_query(ProfileForm.birth_time, F.data.startswith("birth_time:"))
+    async def birth_time_choice(callback: CallbackQuery, state: FSMContext) -> None:
+        parts = (callback.data or "").split(":")
+        try:
+            action = parts[1]
+            if action == "hour":
+                hour = int(parts[2])
+                if not 0 <= hour <= 23:
+                    raise ValueError
+                await state.update_data(
+                    birth_time_step="minute_range",
+                    birth_hour=hour,
+                    birth_minute_start=None,
+                )
+            elif action == "range":
+                hour, minute_start = map(int, parts[2:4])
+                if not 0 <= hour <= 23 or minute_start not in range(0, 60, 10):
+                    raise ValueError
+                await state.update_data(
+                    birth_time_step="minute",
+                    birth_hour=hour,
+                    birth_minute_start=minute_start,
+                )
+            elif action == "minute":
+                hour, minute = map(int, parts[2:4])
+                value = time(hour, minute)
+                await state.update_data(
+                    birth_time=value.isoformat(),
+                    birth_time_step=None,
+                    birth_hour=None,
+                    birth_minute_start=None,
+                )
+                await state.set_state(ProfileForm.city)
                 await _schedule_form_reminder(
                     store,
                     callback.from_user.id,
                     state="city",
                     text=CITY_PROMPT,
                 )
-                await callback.message.answer(CITY_PROMPT)
-        else:
-            await state.set_state(ProfileForm.birth_time)
-            if callback.message:
-                warning = (
-                    " В домах карты возможна неточность."
-                    if value == TimePrecision.APPROXIMATE
-                    else ""
-                )
-                prompt = f"Введи время рождения в формате ЧЧ:ММ.{warning}"
+                await callback.answer()
+                if isinstance(callback.message, Message):
+                    await callback.message.edit_text(f"🕐 Время рождения: {hour:02d}:{minute:02d}")
+                    await callback.message.answer(CITY_PROMPT)
+                return
+            elif action == "back" and parts[2] == "precision":
+                await state.set_state(ProfileForm.time_precision)
+                keyboard = _time_precision_keyboard()
                 await _schedule_form_reminder(
                     store,
                     callback.from_user.id,
-                    state="birth_time",
-                    text=prompt,
+                    state="time_precision",
+                    text=TIME_PRECISION_PROMPT,
+                    reply_markup=keyboard,
                 )
-                await callback.message.answer(prompt)
-
-    @router.message(ProfileForm.birth_time)
-    async def birth_time(message: Message, state: FSMContext) -> None:
-        try:
-            value = datetime.strptime((message.text or "").strip(), "%H:%M").time()
-        except ValueError:
-            if message.from_user:
-                await _schedule_form_reminder(
-                    store,
-                    message.from_user.id,
-                    state="birth_time",
-                    text="Введи время рождения в формате ЧЧ:ММ.",
+                await callback.answer()
+                if isinstance(callback.message, Message):
+                    await callback.message.edit_text(
+                        TIME_PRECISION_PROMPT,
+                        reply_markup=keyboard,
+                    )
+                return
+            elif action == "back" and parts[2] == "hours":
+                await state.update_data(
+                    birth_time_step="hour",
+                    birth_hour=None,
+                    birth_minute_start=None,
                 )
-            await message.answer("Не удалось прочитать время. Используй формат ЧЧ:ММ.")
+            elif action == "back" and parts[2] == "ranges":
+                hour = int(parts[3])
+                if not 0 <= hour <= 23:
+                    raise ValueError
+                await state.update_data(
+                    birth_time_step="minute_range",
+                    birth_hour=hour,
+                    birth_minute_start=None,
+                )
+            else:
+                raise ValueError
+        except (IndexError, TypeError, ValueError):
+            await callback.answer("Вариант устарел. Выбери время ещё раз.", show_alert=True)
             return
-        await state.update_data(birth_time=value.isoformat())
-        await state.set_state(ProfileForm.city)
-        if message.from_user:
-            await _schedule_form_reminder(
-                store,
-                message.from_user.id,
-                state="city",
-                text=CITY_PROMPT,
-            )
-        await message.answer(CITY_PROMPT)
+
+        data = await state.get_data()
+        prompt, keyboard = _birth_time_picker(data)
+        await _schedule_form_reminder(
+            store,
+            callback.from_user.id,
+            state="birth_time",
+            text=prompt,
+            reply_markup=keyboard,
+        )
+        await callback.answer()
+        if isinstance(callback.message, Message):
+            await callback.message.edit_text(prompt, reply_markup=keyboard)
 
     @router.message(ProfileForm.city)
     async def city(message: Message, state: FSMContext) -> None:
