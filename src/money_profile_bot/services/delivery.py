@@ -9,13 +9,14 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
+from money_profile_bot.config import PaymentMode
 from money_profile_bot.models import DeliveryStatus
 from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
-    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     avatar_paid_caption,
     sales_telegram_url,
+    strength_offer_caption,
 )
 from money_profile_bot.services.store import Store
 
@@ -33,12 +34,16 @@ class DeliveryWorker:
         *,
         sales_telegram_username: str,
         product_price_rub: Decimal,
+        payment_mode: PaymentMode = PaymentMode.FAKE,
+        robokassa_test_mode: bool = True,
     ) -> None:
         self.bot = bot
         self.store = store
         self.avatars = avatars
         self.sales_telegram_url = sales_telegram_url(sales_telegram_username)
         self.product_price_rub = product_price_rub
+        self.payment_mode = payment_mode
+        self.robokassa_test_mode = robokassa_test_mode
         self._wake = asyncio.Event()
         self._delivery_lock = asyncio.Lock()
         self._stopping = False
@@ -187,7 +192,10 @@ class DeliveryWorker:
                 sent = await self.bot.send_photo(
                     context.telegram_id,
                     FSInputFile(self.avatars.offer_image(context.money_type)),
-                    caption=STRENGTH_OFFER_CAPTION,
+                    caption=strength_offer_caption(
+                        robokassa=self.payment_mode is PaymentMode.ROBOKASSA,
+                        test_mode=self.robokassa_test_mode,
+                    ),
                     reply_markup=self._strength_offer_keyboard(context.profile_id),
                 )
             except (TelegramAPIError, OSError, RuntimeError, ValueError) as exc:
@@ -201,11 +209,14 @@ class DeliveryWorker:
             return True
 
     def _strength_offer_keyboard(self, profile_id: str) -> InlineKeyboardMarkup:
+        test_suffix = (
+            " · тест" if self.payment_mode is PaymentMode.FAKE or self.robokassa_test_mode else ""
+        )
         return InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text=f"Раскрыть силу — {self.product_price_rub:.0f}₽ · тест",
+                        text=f"Раскрыть силу — {self.product_price_rub:.0f}₽{test_suffix}",
                         callback_data=f"buy:{profile_id}",
                     )
                 ]

@@ -33,7 +33,7 @@ from money_profile_bot.models import (
     StrengthOffer,
 )
 from money_profile_bot.services.astro import calculate_chart
-from money_profile_bot.services.robokassa import Invoice, RobokassaClient
+from money_profile_bot.services.robokassa import Invoice, RobokassaClient, RobokassaError
 from money_profile_bot.services.rules import generate_profile
 from money_profile_bot.services.store import (
     FORM_REMINDER_DELAY,
@@ -53,6 +53,14 @@ class FakeRobokassa:
         return Invoice(
             "invoice-uuid-" + order_code, invoice_id, f"https://pay.example/{order_code}"
         )
+
+
+@dataclass
+class FailingRobokassa:
+    async def create_invoice(
+        self, *, invoice_id: int, order_code: str, amount_minor: int, email: str
+    ) -> Invoice:
+        raise RobokassaError("test invoice failure")
 
 
 @pytest_asyncio.fixture
@@ -111,6 +119,61 @@ async def test_order_creation_reuses_active_invoice(
     )
     assert repeated.reused
     assert repeated.order_id == order_id
+
+
+@pytest.mark.asyncio
+async def test_concurrent_order_creation_reuses_one_invoice(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    facts = calculate_chart(birth)
+    result = generate_profile(facts)
+    profile_id = await service.save_calculation(10001, birth, facts, result)
+
+    first, second = await asyncio.gather(
+        service.create_order(
+            telegram_id=10001,
+            profile_id=profile_id,
+            email="buyer@example.ru",
+            amount_minor=14900,
+        ),
+        service.create_order(
+            telegram_id=10001,
+            profile_id=profile_id,
+            email="buyer@example.ru",
+            amount_minor=14900,
+        ),
+    )
+
+    assert first.order_id == second.order_id
+    assert sorted((first.reused, second.reused)) == [False, True]
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(Order)) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_invoice_creation_marks_order_failed(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    service.robokassa = cast(RobokassaClient, FailingRobokassa())
+    facts = calculate_chart(birth)
+    result = generate_profile(facts)
+    profile_id = await service.save_calculation(10001, birth, facts, result)
+
+    with pytest.raises(RobokassaError, match="invoice failure"):
+        await service.create_order(
+            telegram_id=10001,
+            profile_id=profile_id,
+            email="buyer@example.ru",
+            amount_minor=14900,
+        )
+
+    async with database.sessions() as session:
+        order = await session.scalar(select(Order).where(Order.profile_id == profile_id))
+    assert order is not None
+    assert order.status == OrderStatus.FAILED
+    assert order.receipt_email_encrypted == "invoice-failed"
 
 
 @pytest.mark.asyncio
@@ -246,6 +309,31 @@ async def test_expired_payment_data_is_removed_without_revoking_profile_access(
         assert order.receipt_email_encrypted == "expired"
         assert order.refund_confirmation_hash is None
         assert order.refund_confirmation_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_expired_unpaid_order_scrubs_email_and_payment_link(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    _, _, profile_id = await prepared_order(service, birth)
+    old_created_at = datetime.now(UTC) - timedelta(days=31)
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(Order).where(Order.profile_id == profile_id).values(created_at=old_created_at)
+        )
+
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    assert await service.cleanup_expired_unpaid_orders(cutoff) == 1
+    assert await service.cleanup_expired_unpaid_orders(cutoff) == 0
+
+    async with database.sessions() as session:
+        order = await session.scalar(select(Order).where(Order.profile_id == profile_id))
+    assert order is not None
+    assert order.status == OrderStatus.FAILED
+    assert order.payment_url is None
+    assert order.provider_invoice_uuid is None
+    assert order.receipt_email_encrypted == "expired"
 
 
 @pytest.mark.asyncio

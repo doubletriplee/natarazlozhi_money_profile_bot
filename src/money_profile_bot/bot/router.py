@@ -23,7 +23,7 @@ from aiogram.types import (
     Message,
 )
 
-from money_profile_bot.bot.states import DeleteForm, ProfileForm
+from money_profile_bot.bot.states import DeleteForm, PaymentForm, ProfileForm
 from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.domain import BirthData, City, TimePrecision
 from money_profile_bot.models import OrderStatus
@@ -38,9 +38,10 @@ from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.geonames import CityCatalog
 from money_profile_bot.services.robokassa import RobokassaError
 from money_profile_bot.services.rules import generate_profile, validate_generated_profile
-from money_profile_bot.services.store import ReminderButtons, Store
+from money_profile_bot.services.store import OrderLink, ReminderButtons, Store
 
 START_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,189}\.[^@\s]{2,63}$")
 CONSENT_BUTTON_TEXT = "✅ Согласен(а), продолжить"
 CONSENT_REMINDER_PROMPT = (
     "Нажми «Согласен(а), продолжить», чтобы подтвердить согласие и перейти к анкете."
@@ -402,6 +403,63 @@ def _sales_keyboard(settings: Settings) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def _receipt_email_is_valid(value: str) -> bool:
+    return len(value) <= 254 and EMAIL_RE.fullmatch(value) is not None
+
+
+def _payment_email_prompt(settings: Settings) -> tuple[str, InlineKeyboardMarkup]:
+    mode = (
+        "Сейчас используется тестовая Robokassa: деньги не спишутся. "
+        if settings.robokassa_test_mode
+        else "После этого я создам настоящий счёт Robokassa. "
+    )
+    text = (
+        "Пришли email для электронного чека одним сообщением. "
+        f"{mode}Перед продолжением можно ещё раз открыть условия и политику."
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📜 Условия", url=f"{settings.public_base_url}/terms"),
+                InlineKeyboardButton(
+                    text="🔒 Конфиденциальность",
+                    url=f"{settings.public_base_url}/privacy",
+                ),
+            ],
+            [InlineKeyboardButton(text="Отмена", callback_data="payment:cancel")],
+        ]
+    )
+    return text, keyboard
+
+
+def _payment_link_message(settings: Settings, link: OrderLink) -> tuple[str, InlineKeyboardMarkup]:
+    if settings.robokassa_test_mode:
+        title = "<b>Тестовый счёт Robokassa готов</b>"
+        notice = "Деньги не списываются. Пройди платёжный сценарий до конца."
+        button_text = "Перейти к тестовой оплате"
+    else:
+        title = "<b>Счёт Robokassa готов</b>"
+        notice = "Результат будет отправлен после подтверждения платежа."
+        button_text = f"Оплатить {settings.product_price_rub:.0f} ₽"
+    text = (
+        f"{title}\n\nСумма: {settings.product_price_rub:.2f} ₽\n"
+        f"Код заказа: <code>{html.escape(link.code)}</code>\n\n{notice}"
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=button_text, url=link.url)],
+            [
+                InlineKeyboardButton(text="📜 Условия", url=f"{settings.public_base_url}/terms"),
+                InlineKeyboardButton(
+                    text="🔒 Конфиденциальность",
+                    url=f"{settings.public_base_url}/privacy",
+                ),
+            ],
+        ]
+    )
+    return text, keyboard
 
 
 async def _begin(
@@ -1020,11 +1078,32 @@ def build_router(
             else:
                 delivery.notify()
             return
-        if settings.payment_mode is not PaymentMode.FAKE:
-            await callback.answer(
-                f"Оплата временно недоступна. Напиши @{settings.support_username}.",
-                show_alert=True,
-            )
+        if settings.payment_mode is PaymentMode.ROBOKASSA:
+            if (
+                access.order_status == OrderStatus.INVOICE_CREATED
+                and access.payment_url
+                and access.order_id
+                and access.order_code
+            ):
+                await callback.answer("Ссылка на оплату уже создана")
+                if callback.message:
+                    text, keyboard = _payment_link_message(
+                        settings,
+                        OrderLink(
+                            order_id=access.order_id,
+                            code=access.order_code,
+                            url=access.payment_url,
+                            reused=True,
+                        ),
+                    )
+                    await callback.message.answer(text, reply_markup=keyboard)
+                return
+            await state.update_data(payment_profile_id=profile_id)
+            await state.set_state(PaymentForm.email)
+            await callback.answer()
+            if callback.message:
+                text, keyboard = _payment_email_prompt(settings)
+                await callback.message.answer(text, reply_markup=keyboard)
             return
         await store.create_fake_paid_order(
             telegram_id=callback.from_user.id,
@@ -1034,6 +1113,55 @@ def build_router(
         await store.cancel_form_reminder(callback.from_user.id)
         await callback.answer("Тестовый разбор открыт — деньги не списаны")
         delivery.notify()
+
+    @router.callback_query(PaymentForm.email, F.data == "payment:cancel")
+    async def cancel_payment(callback: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        await callback.answer("Оплата отменена")
+        if callback.message:
+            await callback.message.answer(
+                "Счёт не создан. Вернуться к покупке можно через /profile."
+            )
+
+    @router.message(PaymentForm.email)
+    async def payment_email(message: Message, state: FSMContext) -> None:
+        if not message.from_user:
+            return
+        if settings.payment_mode is not PaymentMode.ROBOKASSA:
+            await state.clear()
+            await message.answer(
+                "Создание счёта сейчас недоступно. Вернись к покупке через /profile."
+            )
+            return
+        email = (message.text or "").strip()
+        if not _receipt_email_is_valid(email):
+            await message.answer(
+                "Не получилось распознать email. Пришли адрес в формате name@example.ru."
+            )
+            return
+        raw = await state.get_data()
+        profile_id = raw.get("payment_profile_id")
+        access = await store.profile_access(message.from_user.id)
+        if not isinstance(profile_id, str) or not access or access.profile_id != profile_id:
+            await state.clear()
+            await message.answer("Профиль не найден. Начни заново с /start.")
+            return
+        try:
+            link = await store.create_order(
+                telegram_id=message.from_user.id,
+                profile_id=profile_id,
+                email=email,
+                amount_minor=settings.product_price_minor,
+            )
+        except (RobokassaError, RuntimeError):
+            await message.answer(
+                f"Robokassa пока не создала счёт. Попробуй ещё раз или напиши "
+                f"@{settings.support_username}."
+            )
+            return
+        await state.clear()
+        text, keyboard = _payment_link_message(settings, link)
+        await message.answer(text, reply_markup=keyboard)
 
     @router.callback_query(F.data.startswith("full:"))
     async def full_reading_offer(callback: CallbackQuery) -> None:

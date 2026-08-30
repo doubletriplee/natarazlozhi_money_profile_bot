@@ -4,6 +4,7 @@ import hashlib
 import re
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
@@ -17,14 +18,17 @@ from money_profile_bot.bot.router import (
     _birth_time_picker,
     _delete_start_command,
     _intro_keyboard,
+    _payment_email_prompt,
+    _payment_link_message,
+    _receipt_email_is_valid,
     _reminder_buttons,
     _request_data_deletion,
     _sales_keyboard,
     _send_free_avatar,
     build_router,
 )
-from money_profile_bot.bot.states import DeleteForm, ProfileForm
-from money_profile_bot.config import Settings
+from money_profile_bot.bot.states import DeleteForm, PaymentForm, ProfileForm
+from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.services.avatar import (
     AVATAR_CHANNELS,
     AVATAR_PRESENTATIONS,
@@ -37,7 +41,9 @@ from money_profile_bot.services.avatar import (
     avatar_free_caption,
     avatar_paid_caption,
     sales_telegram_url,
+    strength_offer_caption,
 )
+from money_profile_bot.services.store import OrderLink
 
 ASSET_DIRECTORY = Path("assets/avatars")
 REQUIRED_HEADINGS = (
@@ -132,6 +138,36 @@ def test_strength_offer_has_practical_transition_paragraph() -> None:
     assert "<b>Тестовый режим оплаты:</b>" in STRENGTH_OFFER_CAPTION
     assert STRENGTH_OFFER_CAPTION.endswith("открывает разбор без списания денег.")
     assert len(STRENGTH_OFFER_CAPTION) <= 1024
+    staging_caption = strength_offer_caption(robokassa=True, test_mode=True)
+    assert "Тестовый режим Robokassa" in staging_caption
+    assert "деньги не списываются" in staging_caption
+    production_caption = strength_offer_caption(robokassa=True, test_mode=False)
+    assert "результат откроется после подтверждения платежа" in production_caption
+    assert "деньги не списываются" not in production_caption
+
+
+def test_robokassa_email_and_payment_copy_are_explicit() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=True,
+        _env_file=None,
+    )
+    prompt, prompt_keyboard = _payment_email_prompt(settings)
+    assert "email для электронного чека" in prompt
+    assert "деньги не спишутся" in prompt
+    assert prompt_keyboard.inline_keyboard[-1][0].callback_data == "payment:cancel"
+    assert _receipt_email_is_valid("buyer@example.ru")
+    assert not _receipt_email_is_valid("buyer@example")
+    assert not _receipt_email_is_valid("buyer @example.ru")
+
+    text, keyboard = _payment_link_message(
+        settings,
+        OrderLink("order-1", "MP-12345678", "https://pay.example/order-1", False),
+    )
+    assert "Тестовый счёт Robokassa готов" in text
+    assert "149.00 ₽" in text
+    assert "Деньги не списываются" in text
+    assert keyboard.inline_keyboard[0][0].url == "https://pay.example/order-1"
 
 
 def test_birth_date_validation_has_no_adult_age_gate() -> None:
@@ -252,6 +288,7 @@ async def test_begin_sends_intro_photo_with_four_legal_buttons() -> None:
     assert buttons[3][0].callback_data == "consent:yes"
     assert not hasattr(ProfileForm, "adult")
     assert not hasattr(ProfileForm, "email")
+    assert hasattr(PaymentForm, "email")
 
 
 @pytest.mark.asyncio
@@ -336,6 +373,93 @@ def test_delete_command_has_priority_over_profile_form_answers() -> None:
 
     assert profile_state_indexes
     assert delete_index < min(profile_state_indexes)
+
+
+@pytest.mark.asyncio
+async def test_robokassa_buy_requests_receipt_email() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=True,
+        _env_file=None,
+    )
+    store = AsyncMock()
+    store.profile_access.return_value = SimpleNamespace(
+        profile_id="profile-1",
+        order_id=None,
+        order_status=None,
+        payment_url=None,
+        order_code=None,
+    )
+    router = build_router(
+        settings,
+        store,
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback for item in router.callback_query.handlers if item.callback.__name__ == "buy"
+    )
+    callback = AsyncMock()
+    callback.data = "buy:profile-1"
+    callback.from_user.id = 123456
+    state = AsyncMock()
+
+    await handler(callback, state)
+
+    state.update_data.assert_awaited_once_with(payment_profile_id="profile-1")
+    state.set_state.assert_awaited_once_with(PaymentForm.email)
+    prompt = callback.message.answer.await_args.args[0]
+    assert "email для электронного чека" in prompt
+    store.create_fake_paid_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_receipt_email_creates_robokassa_invoice_link() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=True,
+        _env_file=None,
+    )
+    store = AsyncMock()
+    store.profile_access.return_value = SimpleNamespace(profile_id="profile-1")
+    store.create_order.return_value = OrderLink(
+        "order-1",
+        "MP-12345678",
+        "https://pay.example/order-1",
+        False,
+    )
+    router = build_router(
+        settings,
+        store,
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback
+        for item in router.message.handlers
+        if item.callback.__name__ == "payment_email"
+    )
+    message = AsyncMock()
+    message.from_user.id = 123456
+    message.text = " buyer@example.ru "
+    state = AsyncMock()
+    state.get_data.return_value = {"payment_profile_id": "profile-1"}
+
+    await handler(message, state)
+
+    store.create_order.assert_awaited_once_with(
+        telegram_id=123456,
+        profile_id="profile-1",
+        email="buyer@example.ru",
+        amount_minor=14900,
+    )
+    state.clear.assert_awaited_once()
+    text = message.answer.await_args.args[0]
+    keyboard = message.answer.await_args.kwargs["reply_markup"]
+    assert "Тестовый счёт Robokassa готов" in text
+    assert keyboard.inline_keyboard[0][0].url == "https://pay.example/order-1"
 
 
 @pytest.mark.asyncio

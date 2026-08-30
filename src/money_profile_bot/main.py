@@ -12,9 +12,10 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiohttp import web
 
+from money_profile_bot.bot.access import StagingAccessMiddleware
 from money_profile_bot.bot.router import build_router, form_reminder_payload, set_commands
 from money_profile_bot.bot.storage import EncryptedDatabaseStorage
-from money_profile_bot.config import Settings, ensure_runtime_directories
+from money_profile_bot.config import Environment, Settings, ensure_runtime_directories
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
 from money_profile_bot.services.avatar import AvatarAssets
@@ -36,6 +37,7 @@ async def maintenance(store: Store, settings: Settings) -> None:
             await store.cleanup_expired_drafts(draft_cutoff)
             if settings.payment_retention_days > 0:
                 payment_cutoff = now - timedelta(days=settings.payment_retention_days)
+                await store.cleanup_expired_unpaid_orders(payment_cutoff)
                 await store.cleanup_expired_payment_data(payment_cutoff)
         except Exception:
             logger.exception("data retention maintenance failed")
@@ -83,6 +85,8 @@ async def serve() -> None:
                 avatars,
                 sales_telegram_username=settings.support_username,
                 product_price_rub=settings.product_price_rub,
+                payment_mode=settings.payment_mode,
+                robokassa_test_mode=settings.robokassa_test_mode,
             )
             backfilled_reminders = await store.backfill_form_reminders(
                 bot.id,
@@ -95,6 +99,10 @@ async def serve() -> None:
                 )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)
+            if settings.app_env is Environment.STAGING:
+                access = StagingAccessMiddleware(settings.test_access_ids)
+                dispatcher.message.outer_middleware(access)
+                dispatcher.callback_query.outer_middleware(access)
             dispatcher.include_router(
                 build_router(
                     settings,

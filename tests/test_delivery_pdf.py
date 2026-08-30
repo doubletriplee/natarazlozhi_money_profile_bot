@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from money_profile_bot.config import PaymentMode
 from money_profile_bot.models import DeliveryStatus
 from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
@@ -13,6 +14,7 @@ from money_profile_bot.services.avatar import (
     STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     avatar_paid_caption,
+    strength_offer_caption,
 )
 from money_profile_bot.services.delivery import FULL_READING_TRIGGER_TEXT, DeliveryWorker
 
@@ -39,6 +41,18 @@ def _worker_context(kind: str) -> tuple[AsyncMock, AsyncMock, DeliveryWorker]:
         product_price_rub=Decimal("149"),
     )
     return bot, store, worker
+
+
+def _robokassa_worker(*, test_mode: bool) -> DeliveryWorker:
+    return DeliveryWorker(
+        AsyncMock(),
+        AsyncMock(),
+        AvatarAssets(ASSET_DIRECTORY),
+        sales_telegram_username="simnatali",
+        product_price_rub=Decimal("149"),
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=test_mode,
+    )
 
 
 @pytest.mark.asyncio
@@ -102,6 +116,19 @@ async def test_strength_offer_is_sent_with_payment_button() -> None:
     assert button.text == "Раскрыть силу — 149₽ · тест"
     assert button.callback_data == "buy:profile-1"
     store.mark_strength_offer_sent.assert_awaited_once_with("offer-1", 42)
+
+
+def test_robokassa_payment_button_distinguishes_test_and_live_modes() -> None:
+    staging = _robokassa_worker(test_mode=True)
+    production = _robokassa_worker(test_mode=False)
+
+    assert (
+        staging._strength_offer_keyboard("profile-1").inline_keyboard[0][0].text.endswith("· тест")
+    )
+    assert production._strength_offer_keyboard("profile-1").inline_keyboard[0][0].text == (
+        "Раскрыть силу — 149₽"
+    )
+    assert "Тестовый режим Robokassa" in strength_offer_caption(robokassa=True, test_mode=True)
 
 
 @pytest.mark.asyncio

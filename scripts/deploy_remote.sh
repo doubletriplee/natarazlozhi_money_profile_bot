@@ -72,8 +72,18 @@ cd "$deploy_directory"
 
 app_env="$(sed -n 's/^APP_ENV=//p' .env | tail -n 1)"
 payment_mode="$(sed -n 's/^PAYMENT_MODE=//p' .env | tail -n 1)"
-if [[ "$app_env" != "test" || "$payment_mode" != "fake" ]]; then
-    echo "Routine deployment is restricted to APP_ENV=test and PAYMENT_MODE=fake." >&2
+robokassa_test_mode="$(sed -n 's/^ROBOKASSA_TEST_MODE=//p' .env | tail -n 1)"
+if [[ "$app_env" == "test" && "$payment_mode" == "fake" ]]; then
+    :
+elif [[ "$app_env" == "staging" && "$payment_mode" == "robokassa" && "$robokassa_test_mode" == "true" ]]; then
+    test_access_ids="$(sed -n 's/^TEST_ACCESS_TELEGRAM_IDS=//p' .env | tail -n 1)"
+    test_password1="$(sed -n 's/^ROBOKASSA_TEST_PASSWORD1=//p' .env | tail -n 1)"
+    test_password2="$(sed -n 's/^ROBOKASSA_TEST_PASSWORD2=//p' .env | tail -n 1)"
+    [[ -n "$test_access_ids" ]] || { echo "Staging requires TEST_ACCESS_TELEGRAM_IDS." >&2; exit 1; }
+    [[ -n "$test_password1" ]] || { echo "Staging requires ROBOKASSA_TEST_PASSWORD1." >&2; exit 1; }
+    [[ -n "$test_password2" ]] || { echo "Staging requires ROBOKASSA_TEST_PASSWORD2." >&2; exit 1; }
+else
+    echo "Deployment allows only test/fake or private staging/robokassa with ROBOKASSA_TEST_MODE=true." >&2
     echo "Real payments require the separate release-gate process." >&2
     exit 1
 fi

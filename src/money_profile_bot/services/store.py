@@ -602,6 +602,17 @@ class Store:
     async def create_order(
         self, *, telegram_id: int, profile_id: str, email: str, amount_minor: int
     ) -> OrderLink:
+        async with self._payment_lock:
+            return await self._create_order_locked(
+                telegram_id=telegram_id,
+                profile_id=profile_id,
+                email=email,
+                amount_minor=amount_minor,
+            )
+
+    async def _create_order_locked(
+        self, *, telegram_id: int, profile_id: str, email: str, amount_minor: int
+    ) -> OrderLink:
         user = await self.ensure_user(telegram_id)
         now = datetime.now(UTC)
         async with self.sessions() as session:
@@ -650,14 +661,22 @@ class Store:
         else:
             raise RuntimeError("cannot allocate a unique payment order")
 
-        invoice: Invoice = await self.robokassa.create_invoice(
-            invoice_id=invoice_id,
-            order_code=code,
-            amount_minor=amount_minor,
-            email=email,
-        )
-        if invoice.invoice_id != invoice_id:
-            raise RuntimeError("Robokassa returned a different invoice id")
+        try:
+            invoice: Invoice = await self.robokassa.create_invoice(
+                invoice_id=invoice_id,
+                order_code=code,
+                amount_minor=amount_minor,
+                email=email,
+            )
+            if invoice.invoice_id != invoice_id:
+                raise RuntimeError("Robokassa returned a different invoice id")
+        except Exception:
+            async with self.sessions() as session, session.begin():
+                failed_order = await session.get(Order, order_id)
+                if failed_order and failed_order.status == OrderStatus.PENDING:
+                    failed_order.status = OrderStatus.FAILED
+                    failed_order.receipt_email_encrypted = "invoice-failed"
+            raise
         async with self.sessions() as session, session.begin():
             order = await session.get(Order, order_id)
             if not order:
@@ -1150,6 +1169,48 @@ class Store:
             )
             await session.execute(delete(Payment).where(Payment.id.in_(payment_ids)))
             return len(payment_ids)
+
+    async def cleanup_expired_unpaid_orders(self, older_than: datetime) -> int:
+        """Scrub contact data and payment links from stale orders without a payment."""
+        async with self.sessions() as session, session.begin():
+            order_ids = list(
+                (
+                    await session.scalars(
+                        select(Order.id).where(
+                            Order.created_at < older_than,
+                            Order.status.in_(
+                                (
+                                    OrderStatus.PENDING,
+                                    OrderStatus.INVOICE_CREATED,
+                                    OrderStatus.FAILED,
+                                )
+                            ),
+                            or_(
+                                Order.payment_url.is_not(None),
+                                Order.provider_invoice_uuid.is_not(None),
+                                Order.receipt_email_encrypted.not_in(
+                                    ("expired", "invoice-failed", "deleted")
+                                ),
+                            ),
+                        )
+                    )
+                ).all()
+            )
+            if not order_ids:
+                return 0
+            await session.execute(
+                update(Order)
+                .where(Order.id.in_(order_ids))
+                .values(
+                    provider_invoice_uuid=None,
+                    payment_url=None,
+                    receipt_email_encrypted="expired",
+                    status=OrderStatus.FAILED,
+                    refund_confirmation_hash=None,
+                    refund_confirmation_expires_at=None,
+                )
+            )
+            return len(order_ids)
 
     async def delete_personal_data(self, telegram_id: int) -> list[str] | None:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")

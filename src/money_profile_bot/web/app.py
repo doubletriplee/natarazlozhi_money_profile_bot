@@ -125,10 +125,19 @@ def create_web_app(
         return web.Response(status=204)
 
     async def payment_success(_: web.Request) -> web.Response:
-        body = f"""<p>Платёжная страница закрыта. Подтверждение может занять несколько секунд.</p>
+        if settings.robokassa_test_mode:
+            title = "Тестовая оплата завершена"
+            opening = (
+                "Тестовая платёжная страница закрыта. Деньги не списаны. "
+                "Подтверждение может занять несколько секунд."
+            )
+        else:
+            title = "Платёж принят"
+            opening = "Платёжная страница закрыта. Подтверждение может занять несколько секунд."
+        body = f"""<p>{opening}</p>
 <p>Вернитесь в Telegram: результат будет отправлен автоматически. Также можно использовать
-команду <code>/profile</code>.</p><p><a href="https://t.me/{html.escape(settings.bot_username)}">Вернуться в бот</a></p>"""
-        return web.Response(text=_page("Платёж принят", body), content_type="text/html")
+ команду <code>/profile</code>.</p><p><a href="https://t.me/{html.escape(settings.bot_username)}">Вернуться в бот</a></p>"""
+        return web.Response(text=_page(title, body), content_type="text/html")
 
     async def payment_fail(_: web.Request) -> web.Response:
         body = f"""<p>Robokassa не подтвердила оплату. Деньги не должны быть списаны.</p>

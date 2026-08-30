@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Environment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
+    STAGING = "staging"
     PRODUCTION = "production"
 
 
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     telegram_proxy_url: str = ""
     support_username: str = "simnatali"
     admin_telegram_ids: str = ""
+    test_access_telegram_ids: str = ""
     bootstrap_admin_on_first_start: bool = False
     product_price_rub: Decimal = Field(default=Decimal("149.00"), gt=0)
     payment_mode: PaymentMode = PaymentMode.FAKE
@@ -103,10 +105,44 @@ class Settings(BaseSettings):
             if self.payment_mode is not PaymentMode.FAKE:
                 raise ValueError("test configuration is incomplete: PAYMENT_MODE=fake")
 
-        if self.app_env is not Environment.PRODUCTION:
+        if self.app_env is Environment.DEVELOPMENT or self.app_env is Environment.TEST:
             self.app_encryption_key = self.app_encryption_key or _development_key("data")
             self.lookup_hmac_key = self.lookup_hmac_key or _development_key("lookup")
             self.backup_encryption_key = self.backup_encryption_key or _development_key("backup")
+            return self
+
+        if self.app_env is Environment.STAGING:
+            staging_missing: list[str] = []
+            if not self.web_only and not self.bot_token:
+                staging_missing.append("BOT_TOKEN")
+            if not self.admin_ids:
+                staging_missing.append("ADMIN_TELEGRAM_IDS")
+            if not self.test_access_ids:
+                staging_missing.append("TEST_ACCESS_TELEGRAM_IDS")
+            if self.bootstrap_admin_on_first_start:
+                staging_missing.append("BOOTSTRAP_ADMIN_ON_FIRST_START=false")
+            if self.source_commit == "development" or len(self.source_commit) < 7:
+                staging_missing.append("SOURCE_COMMIT")
+            if self.payment_mode is not PaymentMode.ROBOKASSA:
+                staging_missing.append("PAYMENT_MODE=robokassa")
+            if not self.robokassa_test_mode:
+                staging_missing.append("ROBOKASSA_TEST_MODE=true")
+            if not self.robokassa_merchant_login:
+                staging_missing.append("ROBOKASSA_MERCHANT_LOGIN")
+            if not self.robokassa_test_password1:
+                staging_missing.append("ROBOKASSA_TEST_PASSWORD1")
+            if not self.robokassa_test_password2:
+                staging_missing.append("ROBOKASSA_TEST_PASSWORD2")
+            if not self.app_encryption_key:
+                staging_missing.append("APP_ENCRYPTION_KEY")
+            if not self.lookup_hmac_key:
+                staging_missing.append("LOOKUP_HMAC_KEY")
+            if not self.backup_encryption_key:
+                staging_missing.append("BACKUP_ENCRYPTION_KEY")
+            if staging_missing:
+                raise ValueError(
+                    "staging configuration is incomplete: " + ", ".join(staging_missing)
+                )
             return self
 
         missing: list[str] = []
@@ -159,6 +195,10 @@ class Settings(BaseSettings):
     @property
     def admin_ids(self) -> frozenset[int]:
         return self._parse_id_list(self.admin_telegram_ids)
+
+    @property
+    def test_access_ids(self) -> frozenset[int]:
+        return self._parse_id_list(self.test_access_telegram_ids)
 
     @staticmethod
     def _parse_id_list(raw: str) -> frozenset[int]:

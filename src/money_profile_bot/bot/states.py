@@ -12,5 +12,9 @@ class ProfileForm(StatesGroup):
     confirm = State()
 
 
+class PaymentForm(StatesGroup):
+    email = State()
+
+
 class DeleteForm(StatesGroup):
     confirm = State()

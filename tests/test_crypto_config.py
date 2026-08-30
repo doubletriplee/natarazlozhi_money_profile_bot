@@ -81,3 +81,37 @@ def test_public_test_requires_fake_payment() -> None:
         _env_file=None,
     )
     assert settings.app_env is Environment.TEST
+
+
+def test_staging_requires_test_robokassa_and_private_access() -> None:
+    required = {
+        "app_env": Environment.STAGING,
+        "bot_token": "123:test",
+        "admin_telegram_ids": "10001",
+        "test_access_telegram_ids": "10001, 20002",
+        "bootstrap_admin_on_first_start": False,
+        "source_commit": "abcdef1",
+        "payment_mode": PaymentMode.ROBOKASSA,
+        "robokassa_merchant_login": "demo",
+        "robokassa_test_password1": "test-pass-1",
+        "robokassa_test_password2": "test-pass-2",
+        "robokassa_test_mode": True,
+        "app_encryption_key": key(),
+        "lookup_hmac_key": key(),
+        "backup_encryption_key": key(),
+        "_env_file": None,
+    }
+    settings = Settings(**required)
+
+    assert settings.app_env is Environment.STAGING
+    assert settings.payment_mode is PaymentMode.ROBOKASSA
+    assert settings.test_access_ids == frozenset({10001, 20002})
+    assert settings.active_robokassa_password1 == "test-pass-1"
+    assert settings.active_robokassa_password2 == "test-pass-2"
+
+    with pytest.raises(ValidationError, match="TEST_ACCESS_TELEGRAM_IDS"):
+        Settings(**(required | {"test_access_telegram_ids": ""}))
+    with pytest.raises(ValidationError, match="PAYMENT_MODE=robokassa"):
+        Settings(**(required | {"payment_mode": PaymentMode.FAKE}))
+    with pytest.raises(ValidationError, match="ROBOKASSA_TEST_MODE=true"):
+        Settings(**(required | {"robokassa_test_mode": False}))
