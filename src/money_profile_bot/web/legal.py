@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import re
 
-from money_profile_bot.config import PaymentMode, Settings
+from money_profile_bot.config import Settings
 
 _DOCUMENT_FILES = {
     "privacy": "privacy_final.md",
@@ -80,21 +80,11 @@ def _render_markdown(source: str) -> str:
     return "\n".join(rendered)
 
 
-def _test_mode_notice(settings: Settings) -> str:
-    if settings.payment_mode is not PaymentMode.FAKE:
-        return ""
-    return """
-<section class="notice" role="note">
-<h2>Закрытый тест — оплаты нет</h2>
-<p>Сервис работает в закрытом тестовом режиме: деньги не списываются, покупка и обязанность оплаты не возникают. Реальная продажа через бота отключена. Robokassa в закрытом тесте не получает данные, а кнопки с ценой открывают только тестовый результат.</p>
-</section>"""
-
-
 def _document_body(settings: Settings, document: str) -> str:
     filename = _DOCUMENT_FILES[document]
     path = settings.legal_documents_directory / filename
     source = path.read_text(encoding="utf-8")
-    return _test_mode_notice(settings) + _render_markdown(source)
+    return _render_markdown(source)
 
 
 def privacy_body(settings: Settings) -> str:

@@ -6,16 +6,15 @@ from unittest.mock import AsyncMock
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from money_profile_bot.config import PaymentMode, Settings
+from money_profile_bot.config import Settings
 from money_profile_bot.services.robokassa import RobokassaClient
 from money_profile_bot.services.store import Store
 from money_profile_bot.web.app import create_web_app
 
 
 @pytest.mark.asyncio
-async def test_fake_mode_legal_pages_disclose_that_no_purchase_occurs() -> None:
+async def test_legal_pages_render_final_documents_without_test_notice() -> None:
     settings = Settings(
-        payment_mode=PaymentMode.FAKE,
         payment_retention_days=30,
         _env_file=None,
     )
@@ -42,12 +41,10 @@ async def test_fake_mode_legal_pages_disclose_that_no_purchase_occurs() -> None:
     assert "natali.nata5689@mail.ru" in privacy
     assert "Редакция от 30 августа 2026 года" in privacy
     assert "REG.RU" in privacy
-    assert "Robokassa в закрытом тесте не получает данные" in privacy
-    assert "Сервис работает в закрытом тестовом режиме" in privacy
-    assert "деньги не списываются" in terms
-    assert "покупка и обязанность оплаты не возникают" in terms
-    assert "Реальная продажа через бота отключена" in terms
+    assert "Закрытый тест — оплаты нет" not in privacy
+    assert "Сервис работает в закрытом тестовом режиме" not in privacy
+    assert "Закрытый тест — оплаты нет" not in terms
     assert "Публичная оферта на оказание информационно-развлекательных услуг" in terms
     assert "Согласен(а)" in consent
     assert "Оно не означает принятия Публичной оферты" in consent
-    assert "деньги не списываются" in consent
+    assert "Закрытый тест — оплаты нет" not in consent
