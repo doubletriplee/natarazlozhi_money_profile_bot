@@ -19,7 +19,7 @@ function Invoke-NativeCommand {
 
     & $Command @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code ${LASTEXITCODE}: $Command $($Arguments -join ' ')"
+        throw "Command failed with exit code ${LASTEXITCODE}: $Command"
     }
 }
 
@@ -33,7 +33,7 @@ function Read-NativeCommand {
 
     $output = & $Command @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code ${LASTEXITCODE}: $Command $($Arguments -join ' ')"
+        throw "Command failed with exit code ${LASTEXITCODE}: $Command"
     }
     return ($output | Out-String).Trim()
 }
@@ -90,7 +90,10 @@ try {
     ) -join "; "
 
     Write-Host "Deploying the same commit through one SSH session..."
-    Invoke-NativeCommand -Command "ssh" -Arguments @($Server, $remoteCommand)
+    & ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 $Server $remoteCommand
+    if ($LASTEXITCODE -ne 0) {
+        throw "SSH deployment failed. Configure the deployment key for $Server once, then rerun this same command."
+    }
     Write-Host "Deployment completed: $commit"
 }
 finally {
