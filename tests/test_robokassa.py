@@ -88,6 +88,38 @@ async def test_invoice_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
+async def test_test_invoice_uses_bound_success_return(monkeypatch: pytest.MonkeyPatch) -> None:
+    value = settings().model_copy(update={"robokassa_test_mode": True})
+    robokassa = RobokassaClient(value, cast(ClientSession, None))
+    post_jwt = AsyncMock(return_value={"isSuccess": True, "id": "id", "invId": 42, "url": "url"})
+    monkeypatch.setattr(robokassa, "_post_jwt", post_jwt)
+
+    await robokassa.create_invoice(
+        invoice_id=42,
+        order_code="ORDER-42",
+        amount_minor=14900,
+        email="buyer@example.ru",
+    )
+
+    payload = post_jwt.await_args.args[1]
+    token = robokassa.test_success_token(invoice_id=42, amount_minor=14900)
+    assert payload["SuccessUrl2Data"] == {
+        "Url": f"{value.public_base_url}/payments/robokassa/success/42/14900/{token}",
+        "Method": "GET",
+    }
+
+
+def test_bound_test_success_token_rejects_changed_order_data() -> None:
+    value = settings().model_copy(update={"robokassa_test_mode": True})
+    robokassa = RobokassaClient(value, cast(ClientSession, None))
+    token = robokassa.test_success_token(invoice_id=42, amount_minor=14900)
+
+    assert robokassa.verify_test_success_token(invoice_id=42, amount_minor=14900, token=token)
+    assert not robokassa.verify_test_success_token(invoice_id=43, amount_minor=14900, token=token)
+    assert not robokassa.verify_test_success_token(invoice_id=42, amount_minor=1, token=token)
+
+
+@pytest.mark.asyncio
 async def test_refund_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) -> None:
     robokassa = client()
     post_jwt = AsyncMock(return_value={"success": True, "requestId": "refund-id"})

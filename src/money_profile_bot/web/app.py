@@ -237,6 +237,25 @@ def create_web_app(
 
     async def payment_success(request: web.Request) -> web.Response:
         if settings.payment_mode is PaymentMode.ROBOKASSA and settings.robokassa_test_mode:
+            trusted_invoice_id: int | None = None
+            trusted_amount_minor: int | None = None
+            route_invoice = request.match_info.get("invoice_id", "")
+            route_amount = request.match_info.get("amount_minor", "")
+            route_token = request.match_info.get("token", "")
+            try:
+                route_invoice_id = int(route_invoice)
+                route_amount_minor = int(route_amount)
+            except ValueError:
+                pass
+            else:
+                if route_token and robokassa.verify_test_success_token(
+                    invoice_id=route_invoice_id,
+                    amount_minor=route_amount_minor,
+                    token=route_token,
+                ):
+                    trusted_invoice_id = route_invoice_id
+                    trusted_amount_minor = route_amount_minor
+
             if request.method == "POST":
                 posted = await request.post()
                 data = {str(key): str(value) for key, value in posted.items()}
@@ -245,7 +264,7 @@ def create_web_app(
             out_sum = _field(data, "OutSum")
             invoice_raw = _field(data, "InvId", "InvID", "InvoiceID")
             signature = _field(data, "SignatureValue")
-            if (
+            if trusted_invoice_id is None and (
                 out_sum
                 and invoice_raw
                 and signature
@@ -257,19 +276,26 @@ def create_web_app(
                 )
             ):
                 try:
+                    trusted_invoice_id = int(invoice_raw)
+                    trusted_amount_minor = _minor(out_sum)
+                except (ValueError, InvalidOperation):
+                    logger.warning("ignored malformed signed test payment success return")
+            elif trusted_invoice_id is None and (out_sum or invoice_raw or signature):
+                logger.warning("ignored unsigned or incomplete test payment success return")
+
+            if trusted_invoice_id is not None and trusted_amount_minor is not None:
+                try:
                     result = await store.accept_payment_callback(
-                        invoice_id=int(invoice_raw),
-                        amount_minor=_minor(out_sum),
+                        invoice_id=trusted_invoice_id,
+                        amount_minor=trusted_amount_minor,
                         email=None,
                     )
                 except (ValueError, InvalidOperation, LookupError):
-                    logger.warning("rejected validly signed test payment success return")
+                    logger.warning("rejected trusted test payment success return")
                 else:
-                    logger.info("accepted signed test payment success return")
+                    logger.info("accepted trusted test payment success return")
                     if result.newly_paid and delivery:
                         delivery.notify()
-            elif out_sum or invoice_raw or signature:
-                logger.warning("ignored unsigned or incomplete test payment success return")
         raise web.HTTPFound(location=f"https://t.me/{settings.bot_username}")
 
     async def payment_fail(_: web.Request) -> web.Response:
@@ -287,6 +313,11 @@ def create_web_app(
     app.router.add_get("/consent", consent)
     app.router.add_route("*", "/payments/robokassa/result", payment_result)
     app.router.add_post("/payments/robokassa/result2", payment_result)
+    app.router.add_route(
+        "*",
+        "/payments/robokassa/success/{invoice_id}/{amount_minor}/{token}",
+        payment_success,
+    )
     app.router.add_route("*", "/payments/robokassa/success", payment_success)
     app.router.add_route("*", "/payments/robokassa/fail", payment_fail)
     return app
