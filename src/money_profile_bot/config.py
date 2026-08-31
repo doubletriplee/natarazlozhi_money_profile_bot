@@ -67,12 +67,12 @@ class Settings(BaseSettings):
     source_repository_url: str = "https://github.com/doubletriplee/natarazlozhi_money_profile_bot"
     source_commit: str = "development"
 
-    legal_docs_version: str = "2026-08-30.1"
+    legal_docs_version: str = "2026-08-31.1"
     methodology_approved: bool = True
     golden_cards_approved: bool = False
     operator_name: str = "Симоненко Наталья Сергеевна"
     operator_inn: str = "026108860870"
-    operator_email: str = "natali.nata5689@mail.ru"
+    operator_email: str = "simonenkons@ya.ru"
     payment_retention_days: int = Field(default=30, ge=0)
     profile_draft_retention_days: int = Field(default=30, ge=1)
     backup_retention_days: int = Field(default=14, ge=1)

@@ -121,6 +121,7 @@ def test_sales_link_prefills_exact_message() -> None:
     assert parsed.netloc == "t.me"
     assert parsed.path == "/simnatali"
     assert parse_qs(parsed.query) == {"text": [SALES_MESSAGE_TEXT]}
+    assert "из бота «Денежный аватар»" in SALES_MESSAGE_TEXT
     assert "1 990₽" in FULL_READING_CAPTION
     assert "990₽" in FULL_READING_CAPTION
     assert "1 990 ₽" not in FULL_READING_CAPTION

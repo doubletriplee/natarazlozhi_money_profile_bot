@@ -59,8 +59,8 @@ def _home_page(settings: Settings) -> str:
 
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<meta name="description" content="Персональные разборы Денежного потенциала по натальной карте.">
-<title>Денежный потенциал — персональный разбор</title><style>
+<meta name="description" content="Персональные разборы Денежного аватара по натальной карте.">
+<title>Денежный аватар — персональный разбор</title><style>
 {_SITE_STYLE}
 body {{ min-width:320px }} a {{ color:var(--accent) }} .home {{ width:min(100%,1120px); margin:0 auto;
 padding:32px 24px 40px }} .panel {{ background:var(--surface); border:1px solid var(--border);
@@ -103,16 +103,16 @@ border-radius:24px }} .section h2 {{ margin-bottom:24px }} .steps li {{ min-heig
 @media(prefers-reduced-motion:reduce) {{ * {{ scroll-behavior:auto!important }} }}
 </style></head><body><main class="home">
 <section class="panel hero" aria-labelledby="hero-title"><div class="hero-copy">
-<h1 id="hero-title">Узнай свой Денежный потенциал</h1>
+<h1 id="hero-title">Узнай свой Денежный аватар</h1>
 <p class="lead">Персональный разбор по натальной карте, который помогает увидеть сильные стороны,
 подходящие направления реализации и особенности взаимодействия с деньгами.</p>
-<div class="cta-wrap"><a class="button" href="{bot_url}">Узнать свой Денежный потенциал</a>
+<div class="cta-wrap"><a class="button" href="{bot_url}">Узнать свой Денежный аватар</a>
 <span class="hero-note">Разбор проходит в Telegram-боте</span></div>{test_notice}
 </div></section>
 
 <section class="panel section" aria-labelledby="services-title"><h2 id="services-title">Услуги</h2>
 <div class="product-grid">
-<article class="product-card"><h3>Разбор Денежного потенциала</h3><p class="price">{first_price} ₽</p>
+<article class="product-card"><h3>Разбор Денежного аватара</h3><p class="price">{first_price} ₽</p>
 <ul><li>подходящие профессии</li><li>комфортный формат работы</li>
 <li>как лучше проявляться и подавать себя</li><li>денежная ловушка</li>
 <li>денежный шаг уже сегодня</li></ul>
@@ -126,7 +126,7 @@ border-radius:24px }} .section h2 {{ margin-bottom:24px }} .steps li {{ min-heig
 
 <section class="panel section" aria-labelledby="steps-title"><h2 id="steps-title">Как это работает</h2>
 <ol class="steps"><li>Перейти в Telegram-бот.</li><li>Ввести дату, точное время и место рождения.</li>
-<li>Получить расчёт Денежного потенциала.</li>
+<li>Получить расчёт Денежного аватара.</li>
 <li>При желании выбрать подробный платный разбор.</li></ol></section>
 
 <section class="panel section" aria-labelledby="important-title"><h2 id="important-title">Важно</h2>

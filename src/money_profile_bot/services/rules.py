@@ -335,7 +335,7 @@ def generate_profile(facts: ChartFacts) -> GeneratedProfile:
     )
     free_insight = avatar_free_caption(money_type)
     return GeneratedProfile(
-        title="Денежный потенциал" if facts.mode == "profile" else "Денежный стиль",
+        title="Денежный аватар" if facts.mode == "profile" else "Денежный стиль",
         money_type=money_type,
         strength=strength,
         trap=trap,

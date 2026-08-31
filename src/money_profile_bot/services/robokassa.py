@@ -132,12 +132,12 @@ class RobokassaClient:
             "Culture": "ru",
             "OutSum": amount,
             "ExpirationDate": expires.isoformat(),
-            "Description": f"Денежный потенциал, заказ {order_code}",
+            "Description": f"Денежный аватар, заказ {order_code}",
             "MerchantComments": "Выдать результат только после ResultURL",
             "UserFields": {"order_code": order_code},
             "InvoiceItems": [
                 {
-                    "Name": "Индивидуальный разбор «Денежный потенциал»",
+                    "Name": "Индивидуальный разбор «Денежный аватар»",
                     "Quantity": 1,
                     "Cost": amount,
                     "Tax": "none",
@@ -220,7 +220,7 @@ class RobokassaClient:
             "RefundSum": amount,
             "InvoiceItems": [
                 {
-                    "Name": f"Денежный потенциал, заказ {order_code}",
+                    "Name": f"Денежный аватар, заказ {order_code}",
                     "Quantity": 1,
                     "Cost": amount,
                     "Tax": "none",

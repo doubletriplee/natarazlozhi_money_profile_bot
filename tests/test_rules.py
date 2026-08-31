@@ -39,6 +39,7 @@ def house_facts(house: int) -> ChartFacts:
 @pytest.mark.parametrize("house", range(1, 13))
 def test_all_twelve_house_types_are_deterministic(house: int) -> None:
     profile = generate_profile(house_facts(house))
+    assert profile.title == "Денежный аватар"
     assert profile.money_type == HOUSE_TYPES[house][0]
     assert len(profile.messages) == 6
     assert validate_generated_profile(profile) == []

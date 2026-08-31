@@ -5,6 +5,8 @@ commit="${1:?commit SHA is required}"
 deploy_directory="${2:?deployment directory is required}"
 health_url="${3:?health URL is required}"
 staged_compose="${4:?staged Compose file is required}"
+legal_docs_version="${5:?legal documents version is required}"
+operator_email="${6:?operator email is required}"
 
 if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Invalid commit SHA: $commit" >&2
@@ -16,6 +18,14 @@ if [[ ! "$deploy_directory" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
 fi
 if [[ ! "$health_url" =~ ^https://[^[:space:]]+$ ]]; then
     echo "Invalid health URL: $health_url" >&2
+    exit 2
+fi
+if [[ ! "$legal_docs_version" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+$ ]]; then
+    echo "Invalid legal documents version: $legal_docs_version" >&2
+    exit 2
+fi
+if [[ ! "$operator_email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+    echo "Invalid operator email: $operator_email" >&2
     exit 2
 fi
 expected_staging_directory="/tmp/money-profile-deploy-$commit"
@@ -133,6 +143,8 @@ upsert_env() {
 
 upsert_env "APP_IMAGE" "$image" "$next_env"
 upsert_env "SOURCE_COMMIT" "$commit" "$next_env"
+upsert_env "LEGAL_DOCS_VERSION" "$legal_docs_version" "$next_env"
+upsert_env "OPERATOR_EMAIL" "$operator_email" "$next_env"
 chmod 600 "$next_env"
 
 deployment_started=1

@@ -31,9 +31,9 @@ async def test_home_page_describes_products_delivery_operator_and_legal_links() 
         body = await response.text()
 
     assert response.status == 200
-    assert "Узнай свой Денежный потенциал" in body
+    assert "Узнай свой Денежный аватар" in body
     assert "Персональный разбор по натальной карте" in body
-    assert "Разбор Денежного потенциала" in body
+    assert "Разбор Денежного аватара" in body
     assert 'Получить разбор за <span class="nowrap">149 ₽</span>' in body
     assert "Полный разбор денег и реализации" in body
     assert 'Получить полный разбор за <span class="nowrap">990 ₽</span>' in body
@@ -43,7 +43,7 @@ async def test_home_page_describes_products_delivery_operator_and_legal_links() 
     assert 'href="/consent"' in body
     assert "Симоненко Наталья Сергеевна" in body
     assert "026108860870" in body
-    assert "natali.nata5689@mail.ru" in body
+    assert "simonenkons@ya.ru" in body
     assert "Списание денег и покупка не происходят" in body
     assert "<form" not in body
 
@@ -126,8 +126,10 @@ async def test_legal_pages_render_final_documents_without_test_notice() -> None:
     assert consent_response.status == 200
     assert "Симоненко Наталья Сергеевна" in privacy
     assert "026108860870" in privacy
-    assert "natali.nata5689@mail.ru" in privacy
-    assert "Редакция от 30 августа 2026 года" in privacy
+    assert "simonenkons@ya.ru" in privacy
+    assert "simonenkons@ya.ru" in terms
+    assert "simonenkons@ya.ru" in consent
+    assert "Редакция от 31 августа 2026 года" in privacy
     assert "REG.RU" in privacy
     assert "Закрытый тест — оплаты нет" not in privacy
     assert "Сервис работает в закрытом тестовом режиме" not in privacy

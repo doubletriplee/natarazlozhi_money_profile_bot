@@ -5,7 +5,9 @@ import hashlib
 import hmac
 import json
 from typing import cast
+from unittest.mock import AsyncMock
 
+import pytest
 from aiohttp import ClientSession
 
 from money_profile_bot.config import Settings
@@ -55,3 +57,33 @@ def test_refund_jwt_uses_password3_directly() -> None:
     header, payload, signature = value.split(".")
     expected = hmac.new(b"pass3", f"{header}.{payload}".encode(), hashlib.sha256).digest()
     assert base64.urlsafe_b64encode(expected).rstrip(b"=").decode() == signature
+
+
+@pytest.mark.asyncio
+async def test_invoice_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    robokassa = client()
+    post_jwt = AsyncMock(return_value={"isSuccess": True, "id": "id", "invId": 42, "url": "url"})
+    monkeypatch.setattr(robokassa, "_post_jwt", post_jwt)
+
+    await robokassa.create_invoice(
+        invoice_id=42,
+        order_code="ORDER-42",
+        amount_minor=14900,
+        email="buyer@example.ru",
+    )
+
+    payload = post_jwt.await_args.args[1]
+    assert payload["Description"] == "Денежный аватар, заказ ORDER-42"
+    assert payload["InvoiceItems"][0]["Name"] == "Индивидуальный разбор «Денежный аватар»"
+
+
+@pytest.mark.asyncio
+async def test_refund_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    robokassa = client()
+    post_jwt = AsyncMock(return_value={"success": True, "requestId": "refund-id"})
+    monkeypatch.setattr(robokassa, "_post_jwt", post_jwt)
+
+    await robokassa.refund(operation_key="operation-key", amount_minor=14900, order_code="ORDER-42")
+
+    payload = post_jwt.await_args.args[1]
+    assert payload["InvoiceItems"][0]["Name"] == "Денежный аватар, заказ ORDER-42"
