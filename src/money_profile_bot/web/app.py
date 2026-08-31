@@ -203,15 +203,21 @@ def create_web_app(
     async def payment_result(request: web.Request) -> web.Response:
         if settings.payment_mode is not PaymentMode.ROBOKASSA:
             raise web.HTTPNotFound()
-        if request.method == "POST":
-            posted = await request.post()
-            data = {str(key): str(value) for key, value in posted.items()}
-        else:
-            data = {str(key): str(value) for key, value in request.query.items()}
+        posted = await request.post()
+        data = {str(key): str(value) for key, value in posted.items()}
         out_sum = _field(data, "OutSum")
         invoice_raw = _field(data, "InvId", "InvID", "InvoiceID")
         signature = _field(data, "SignatureValue")
+        logger.info(
+            "received Robokassa ResultURL notification; method=%s, "
+            "has_out_sum=%s, has_invoice_id=%s, has_signature=%s",
+            request.method,
+            bool(out_sum),
+            bool(invoice_raw),
+            bool(signature),
+        )
         if not out_sum or not invoice_raw or not signature:
+            logger.warning("rejected Robokassa ResultURL notification with missing fields")
             raise web.HTTPBadRequest(text="missing payment fields")
         if not robokassa.verify_result(
             out_sum=out_sum,
@@ -219,6 +225,7 @@ def create_web_app(
             signature=signature,
             user_parameters=data,
         ):
+            logger.warning("rejected Robokassa ResultURL notification with invalid signature")
             raise web.HTTPForbidden(text="invalid signature")
         try:
             invoice_id = int(invoice_raw)
@@ -229,12 +236,10 @@ def create_web_app(
                 email=_field(data, "EMail") or None,
             )
         except (ValueError, InvalidOperation, LookupError):
-            logger.warning("rejected validly signed payment notification")
+            logger.warning("rejected validly signed Robokassa ResultURL notification")
             raise web.HTTPBadRequest(text="payment does not match an order") from None
-        callback_kind = "result2" if request.path.endswith("/result2") else "result"
         logger.info(
-            "accepted signed Robokassa %s notification; newly_paid=%s",
-            callback_kind,
+            "accepted signed Robokassa ResultURL notification; newly_paid=%s",
             result.newly_paid,
         )
         if result.newly_paid and delivery:
@@ -257,13 +262,7 @@ def create_web_app(
     app.router.add_get("/privacy", privacy)
     app.router.add_get("/terms", terms)
     app.router.add_get("/consent", consent)
-    app.router.add_route("*", "/payments/robokassa/result", payment_result)
-    app.router.add_post("/payments/robokassa/result2", payment_result)
-    app.router.add_route(
-        "*",
-        "/payments/robokassa/success/{invoice_id}/{amount_minor}/{token}",
-        payment_success,
-    )
+    app.router.add_post("/payments/robokassa/result", payment_result)
     app.router.add_route("*", "/payments/robokassa/success", payment_success)
     app.router.add_route("*", "/payments/robokassa/fail", payment_fail)
     return app

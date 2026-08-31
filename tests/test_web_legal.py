@@ -142,12 +142,8 @@ async def test_legal_pages_render_final_documents_without_test_notice() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "callback_path",
-    ("/payments/robokassa/result", "/payments/robokassa/result2"),
-)
 async def test_signed_robokassa_result_authorizes_delivery_once(
-    callback_path: str, caplog: pytest.LogCaptureFixture
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     settings = Settings(
         payment_mode=PaymentMode.ROBOKASSA,
@@ -165,7 +161,7 @@ async def test_signed_robokassa_result_authorizes_delivery_once(
 
     async with TestClient(TestServer(app)) as client:
         response = await client.post(
-            callback_path,
+            "/payments/robokassa/result",
             data={
                 "OutSum": "149.00",
                 "InvId": "123",
@@ -183,16 +179,14 @@ async def test_signed_robokassa_result_authorizes_delivery_once(
         email="buyer@example.ru",
     )
     delivery.notify.assert_called_once_with()
-    callback_kind = "result2" if callback_path.endswith("result2") else "result"
-    assert f"accepted signed Robokassa {callback_kind} notification" in caplog.text
+    assert "received Robokassa ResultURL notification" in caplog.text
+    assert "accepted signed Robokassa ResultURL notification" in caplog.text
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "callback_path",
-    ("/payments/robokassa/result", "/payments/robokassa/result2"),
-)
-async def test_robokassa_result_rejects_invalid_signature(callback_path: str) -> None:
+async def test_robokassa_result_rejects_invalid_signature(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     settings = Settings(
         payment_mode=PaymentMode.ROBOKASSA,
         robokassa_test_password2="test-password-2",
@@ -206,15 +200,39 @@ async def test_robokassa_result_rejects_invalid_signature(callback_path: str) ->
         RobokassaClient(settings, AsyncMock()),
         None,
     )
+    caplog.set_level(logging.INFO, logger="money_profile_bot.web.app")
 
     async with TestClient(TestServer(app)) as client:
         response = await client.post(
-            callback_path,
+            "/payments/robokassa/result",
             data={"OutSum": "149.00", "InvId": "123", "SignatureValue": "invalid"},
         )
 
     assert response.status == 403
     store.accept_payment_callback.assert_not_awaited()
+    assert "invalid signature" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_robokassa_exposes_only_classic_post_result_callback() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=True,
+        _env_file=None,
+    )
+    app = create_web_app(
+        settings,
+        cast(Store, AsyncMock()),
+        RobokassaClient(settings, AsyncMock()),
+        None,
+    )
+
+    async with TestClient(TestServer(app)) as client:
+        get_result = await client.get("/payments/robokassa/result")
+        result2 = await client.post("/payments/robokassa/result2")
+
+    assert get_result.status == 405
+    assert result2.status == 404
 
 
 @pytest.mark.asyncio
@@ -226,7 +244,6 @@ async def test_robokassa_result_rejects_invalid_signature(callback_path: str) ->
             True,
             "/payments/robokassa/success?OutSum=149.00&InvId=123&SignatureValue=signed",
         ),
-        (True, "/payments/robokassa/success/123/14900/legacy-token"),
         (False, "/payments/robokassa/success?OutSum=149.00&InvId=123"),
     ),
 )

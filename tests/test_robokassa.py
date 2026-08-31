@@ -75,6 +75,9 @@ async def test_invoice_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) -
     payload = post_jwt.await_args.args[1]
     assert payload["Description"] == "Денежный аватар, заказ ORDER-42"
     assert payload["InvoiceItems"][0]["Name"] == "Индивидуальный разбор «Денежный аватар»"
+    assert payload["AdditionalParameters"] == {"Email": "buyer@example.ru"}
+    assert "UserFields" not in payload
+    assert post_jwt.await_args.args[2] == "pass1"
 
 
 @pytest.mark.asyncio
@@ -96,6 +99,15 @@ async def test_test_invoice_uses_plain_success_redirect(monkeypatch: pytest.Monk
         "Url": f"{value.public_base_url}/payments/robokassa/success",
         "Method": "GET",
     }
+    assert payload["FailUrl2Data"] == {
+        "Url": f"{value.public_base_url}/payments/robokassa/fail",
+        "Method": "GET",
+    }
+    assert payload["AdditionalParameters"] == {
+        "Email": "buyer@example.ru",
+        "IsTest": "1",
+    }
+    assert post_jwt.await_args.args[2] == "test1"
 
 
 @pytest.mark.asyncio

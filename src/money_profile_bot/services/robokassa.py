@@ -119,10 +119,7 @@ class RobokassaClient:
             raise RobokassaError("Robokassa credentials are not configured")
         amount = float(_amount_rub(amount_minor))
         expires = datetime.now(UTC) + timedelta(hours=24)
-        additional = {
-            "Email": email,
-            "ResultURL2": f"{self.settings.public_base_url}/payments/robokassa/result2",
-        }
+        additional = {"Email": email}
         if self.settings.robokassa_test_mode:
             additional["IsTest"] = "1"
         payload = {
@@ -134,7 +131,6 @@ class RobokassaClient:
             "ExpirationDate": expires.isoformat(),
             "Description": f"Денежный аватар, заказ {order_code}",
             "MerchantComments": "Выдать результат только после подписанного уведомления",
-            "UserFields": {"order_code": order_code},
             "InvoiceItems": [
                 {
                     "Name": "Индивидуальный разбор «Денежный аватар»",
