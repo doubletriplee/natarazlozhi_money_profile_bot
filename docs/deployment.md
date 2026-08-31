@@ -39,6 +39,22 @@ Stars не используются и не рассматриваются ка�
 `PAYMENT_MODE=fake`, рабочим режимом Robokassa или пустыми staging-секретами. Штатный deploy допускает
 эту конфигурацию, но по-прежнему отклоняет любые реальные списания.
 
+Настройки вносятся из PowerShell без записи секретов в командную строку или Git:
+
+```powershell
+pwsh -NoProfile -File scripts/configure_staging.ps1 `
+  -MerchantLogin your_merchant_login `
+  -TestPassword1 (Read-Host "Robokassa test password #1" -AsSecureString) `
+  -TestPassword2 (Read-Host "Robokassa test password #2" -AsSecureString) `
+  -TelegramId 123456789 `
+  -BotUsername money_profile_test_bot
+```
+
+Сценарий сохраняет исходный серверный файл как `.env.before-staging` с правами `600`, создаёт
+отдельные ключи и базу staging, атомарно обновляет `.env` и проверяет Compose и `Settings` текущего
+образа. Он не перезапускает сервис. После его успешного завершения обязательно выполняется единый
+штатный деплой из раздела ниже. При ошибке проверки исходный `.env` восстанавливается автоматически.
+
 На сервере `195.19.7.56` прямой маршрут до Telegram нестабилен. Поэтому Compose запускает
 изолированный SSH/SOCKS-шлюз `telegram-proxy`; только Telegram-сессия бота использует
 `TELEGRAM_PROXY_URL=socks5://telegram-proxy:1080`. На шлюзе отдельному пользователю разрешён
