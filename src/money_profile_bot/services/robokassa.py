@@ -163,6 +163,24 @@ class RobokassaClient:
             raise RobokassaError(str(data.get("message") or "invoice was rejected"))
         return Invoice(str(data["id"]), int(data["invId"]), str(data["url"]))
 
+    def _verify_payment_signature(
+        self,
+        *,
+        out_sum: str,
+        invoice_id: str,
+        signature: str,
+        password: str,
+        user_parameters: dict[str, str] | None = None,
+    ) -> bool:
+        parts = [out_sum, invoice_id, password]
+        for key, value in sorted((user_parameters or {}).items()):
+            if key.startswith("Shp_"):
+                parts.append(f"{key}={value}")
+        expected = hashlib.new(
+            self.settings.robokassa_hash_algorithm, ":".join(parts).encode()
+        ).hexdigest()
+        return hmac.compare_digest(expected.casefold(), signature.casefold())
+
     def verify_result(
         self,
         *,
@@ -171,14 +189,29 @@ class RobokassaClient:
         signature: str,
         user_parameters: dict[str, str] | None = None,
     ) -> bool:
-        parts = [out_sum, invoice_id, self.settings.active_robokassa_password2]
-        for key, value in sorted((user_parameters or {}).items()):
-            if key.startswith("Shp_"):
-                parts.append(f"{key}={value}")
-        expected = hashlib.new(
-            self.settings.robokassa_hash_algorithm, ":".join(parts).encode()
-        ).hexdigest()
-        return hmac.compare_digest(expected.casefold(), signature.casefold())
+        return self._verify_payment_signature(
+            out_sum=out_sum,
+            invoice_id=invoice_id,
+            signature=signature,
+            password=self.settings.active_robokassa_password2,
+            user_parameters=user_parameters,
+        )
+
+    def verify_success(
+        self,
+        *,
+        out_sum: str,
+        invoice_id: str,
+        signature: str,
+        user_parameters: dict[str, str] | None = None,
+    ) -> bool:
+        return self._verify_payment_signature(
+            out_sum=out_sum,
+            invoice_id=invoice_id,
+            signature=signature,
+            password=self.settings.active_robokassa_password1,
+            user_parameters=user_parameters,
+        )
 
     async def operation_state(self, invoice_id: int) -> OperationState:
         if self.settings.robokassa_test_mode:

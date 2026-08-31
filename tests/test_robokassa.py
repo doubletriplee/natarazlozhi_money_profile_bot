@@ -43,6 +43,16 @@ def test_result_signature_rejects_wrong_amount() -> None:
     assert not client().verify_result(out_sum="1.00", invoice_id="123", signature=signature)
 
 
+def test_success_signature_uses_password1() -> None:
+    signature = hashlib.sha256(b"149.00:123:pass1").hexdigest()
+    assert client().verify_success(out_sum="149.00", invoice_id="123", signature=signature)
+
+
+def test_success_signature_rejects_password2() -> None:
+    signature = hashlib.sha256(b"149.00:123:pass2").hexdigest()
+    assert not client().verify_success(out_sum="149.00", invoice_id="123", signature=signature)
+
+
 def test_invoice_jwt_uses_merchant_and_password_as_hmac_key() -> None:
     value = client()._jwt({"MerchantLogin": "demo", "InvId": 123}, "pass1")
     header, payload, signature = value.split(".")

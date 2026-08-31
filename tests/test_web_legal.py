@@ -212,19 +212,90 @@ async def test_robokassa_result_rejects_invalid_signature(callback_path: str) ->
 
 
 @pytest.mark.asyncio
-async def test_success_redirect_returns_customer_to_telegram_bot() -> None:
-    settings = Settings(robokassa_test_mode=True, _env_file=None)
+async def test_signed_test_success_return_authorizes_delivery_and_redirects() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_password1="test-password-1",
+        robokassa_test_mode=True,
+        _env_file=None,
+    )
+    store = AsyncMock()
+    store.accept_payment_callback.return_value = SimpleNamespace(newly_paid=True)
+    delivery = AsyncMock(spec=DeliveryWorker)
+    robokassa = RobokassaClient(settings, AsyncMock())
+    app = create_web_app(
+        settings,
+        cast(Store, store),
+        robokassa,
+        delivery,
+    )
+    signature = hashlib.sha256(b"149.00:123:test-password-1").hexdigest()
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get(
+            "/payments/robokassa/success",
+            params={"OutSum": "149.00", "InvId": "123", "SignatureValue": signature},
+            allow_redirects=False,
+        )
+
+    assert response.status == 302
+    assert response.headers["Location"] == "https://t.me/money_profile_bot"
+    store.accept_payment_callback.assert_awaited_once_with(
+        invoice_id=123,
+        amount_minor=14900,
+        email=None,
+    )
+    delivery.notify.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_invalid_test_success_return_only_redirects() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_password1="test-password-1",
+        robokassa_test_mode=True,
+        _env_file=None,
+    )
     store = AsyncMock()
     app = create_web_app(
         settings,
         cast(Store, store),
-        cast(RobokassaClient, AsyncMock()),
+        RobokassaClient(settings, AsyncMock()),
         None,
     )
 
     async with TestClient(TestServer(app)) as client:
-        response = await client.get("/payments/robokassa/success", allow_redirects=False)
+        response = await client.get(
+            "/payments/robokassa/success",
+            params={"OutSum": "149.00", "InvId": "123", "SignatureValue": "invalid"},
+            allow_redirects=False,
+        )
+
+    assert response.status == 302
+    store.accept_payment_callback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_success_return_never_authorizes_delivery() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_password1="live-password-1",
+        robokassa_test_mode=False,
+        _env_file=None,
+    )
+    store = AsyncMock()
+    robokassa = AsyncMock(spec=RobokassaClient)
+    app = create_web_app(settings, cast(Store, store), robokassa, None)
+    signature = hashlib.sha256(b"149.00:123:live-password-1").hexdigest()
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get(
+            "/payments/robokassa/success",
+            params={"OutSum": "149.00", "InvId": "123", "SignatureValue": signature},
+            allow_redirects=False,
+        )
 
     assert response.status == 302
     assert response.headers["Location"] == "https://t.me/money_profile_bot"
+    robokassa.verify_success.assert_not_called()
     store.accept_payment_callback.assert_not_awaited()

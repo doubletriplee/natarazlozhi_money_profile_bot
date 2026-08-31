@@ -235,7 +235,41 @@ def create_web_app(
             delivery.notify()
         return web.Response(text=f"OK{invoice_id}", content_type="text/plain")
 
-    async def payment_success(_: web.Request) -> web.Response:
+    async def payment_success(request: web.Request) -> web.Response:
+        if settings.payment_mode is PaymentMode.ROBOKASSA and settings.robokassa_test_mode:
+            if request.method == "POST":
+                posted = await request.post()
+                data = {str(key): str(value) for key, value in posted.items()}
+            else:
+                data = {str(key): str(value) for key, value in request.query.items()}
+            out_sum = _field(data, "OutSum")
+            invoice_raw = _field(data, "InvId", "InvID", "InvoiceID")
+            signature = _field(data, "SignatureValue")
+            if (
+                out_sum
+                and invoice_raw
+                and signature
+                and robokassa.verify_success(
+                    out_sum=out_sum,
+                    invoice_id=invoice_raw,
+                    signature=signature,
+                    user_parameters=data,
+                )
+            ):
+                try:
+                    result = await store.accept_payment_callback(
+                        invoice_id=int(invoice_raw),
+                        amount_minor=_minor(out_sum),
+                        email=None,
+                    )
+                except (ValueError, InvalidOperation, LookupError):
+                    logger.warning("rejected validly signed test payment success return")
+                else:
+                    logger.info("accepted signed test payment success return")
+                    if result.newly_paid and delivery:
+                        delivery.notify()
+            elif out_sum or invoice_raw or signature:
+                logger.warning("ignored unsigned or incomplete test payment success return")
         raise web.HTTPFound(location=f"https://t.me/{settings.bot_username}")
 
     async def payment_fail(_: web.Request) -> web.Response:
