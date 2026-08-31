@@ -256,6 +256,7 @@ async def test_delete_removes_personal_profile_but_keeps_payment_journal(
     await service.accept_payment_callback(invoice_id=invoice_id, amount_minor=14900, email=None)
     assert await service.delete_personal_data(10001) == []
     assert await service.profile_access(10001) is None
+    assert await service.pending_order_ids() == []
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Payment)) == 1
 

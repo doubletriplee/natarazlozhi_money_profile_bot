@@ -867,8 +867,10 @@ class Store:
                     await session.scalars(
                         select(Order.id)
                         .join(DeliveryItem)
+                        .join(Profile, Profile.id == Order.profile_id)
                         .where(
                             Order.status.in_((OrderStatus.PAID, OrderStatus.DELIVERED)),
+                            Profile.deleted_at.is_(None),
                             DeliveryItem.status.in_(
                                 (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
                             ),
