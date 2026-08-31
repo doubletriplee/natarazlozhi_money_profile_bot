@@ -125,10 +125,6 @@ class RobokassaClient:
         }
         if self.settings.robokassa_test_mode:
             additional["IsTest"] = "1"
-        success_url = f"{self.settings.public_base_url}/payments/robokassa/success"
-        if self.settings.robokassa_test_mode:
-            token = self.test_success_token(invoice_id=invoice_id, amount_minor=amount_minor)
-            success_url = f"{success_url}/{invoice_id}/{amount_minor}/{token}"
         payload = {
             "MerchantLogin": self.settings.robokassa_merchant_login,
             "InvId": invoice_id,
@@ -151,7 +147,7 @@ class RobokassaClient:
             ],
             "Aliases": ["BankCard", "SBP"],
             "SuccessUrl2Data": {
-                "Url": success_url,
+                "Url": f"{self.settings.public_base_url}/payments/robokassa/success",
                 "Method": "GET",
             },
             "FailUrl2Data": {
@@ -200,36 +196,6 @@ class RobokassaClient:
             password=self.settings.active_robokassa_password2,
             user_parameters=user_parameters,
         )
-
-    def verify_success(
-        self,
-        *,
-        out_sum: str,
-        invoice_id: str,
-        signature: str,
-        user_parameters: dict[str, str] | None = None,
-    ) -> bool:
-        return self._verify_payment_signature(
-            out_sum=out_sum,
-            invoice_id=invoice_id,
-            signature=signature,
-            password=self.settings.active_robokassa_password1,
-            user_parameters=user_parameters,
-        )
-
-    def test_success_token(self, *, invoice_id: int, amount_minor: int) -> str:
-        message = f"money-profile:test-success:v1:{invoice_id}:{amount_minor}".encode()
-        return hmac.new(
-            self.settings.active_robokassa_password1.encode(),
-            message,
-            self.settings.robokassa_hash_algorithm,
-        ).hexdigest()
-
-    def verify_test_success_token(self, *, invoice_id: int, amount_minor: int, token: str) -> bool:
-        if not self.settings.robokassa_test_mode:
-            return False
-        expected = self.test_success_token(invoice_id=invoice_id, amount_minor=amount_minor)
-        return hmac.compare_digest(expected.casefold(), token.casefold())
 
     async def operation_state(self, invoice_id: int) -> OperationState:
         if self.settings.robokassa_test_mode:
