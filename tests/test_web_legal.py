@@ -141,7 +141,11 @@ async def test_legal_pages_render_final_documents_without_test_notice() -> None:
 
 
 @pytest.mark.asyncio
-async def test_signed_robokassa_result_authorizes_delivery_once() -> None:
+@pytest.mark.parametrize(
+    "callback_path",
+    ("/payments/robokassa/result", "/payments/robokassa/result2"),
+)
+async def test_signed_robokassa_result_authorizes_delivery_once(callback_path: str) -> None:
     settings = Settings(
         payment_mode=PaymentMode.ROBOKASSA,
         robokassa_test_password2="test-password-2",
@@ -157,7 +161,7 @@ async def test_signed_robokassa_result_authorizes_delivery_once() -> None:
 
     async with TestClient(TestServer(app)) as client:
         response = await client.post(
-            "/payments/robokassa/result",
+            callback_path,
             data={
                 "OutSum": "149.00",
                 "InvId": "123",
@@ -178,7 +182,11 @@ async def test_signed_robokassa_result_authorizes_delivery_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_robokassa_result_rejects_invalid_signature() -> None:
+@pytest.mark.parametrize(
+    "callback_path",
+    ("/payments/robokassa/result", "/payments/robokassa/result2"),
+)
+async def test_robokassa_result_rejects_invalid_signature(callback_path: str) -> None:
     settings = Settings(
         payment_mode=PaymentMode.ROBOKASSA,
         robokassa_test_password2="test-password-2",
@@ -195,7 +203,7 @@ async def test_robokassa_result_rejects_invalid_signature() -> None:
 
     async with TestClient(TestServer(app)) as client:
         response = await client.post(
-            "/payments/robokassa/result",
+            callback_path,
             data={"OutSum": "149.00", "InvId": "123", "SignatureValue": "invalid"},
         )
 
@@ -204,19 +212,19 @@ async def test_robokassa_result_rejects_invalid_signature() -> None:
 
 
 @pytest.mark.asyncio
-async def test_staging_success_page_says_money_was_not_charged() -> None:
+async def test_success_redirect_returns_customer_to_telegram_bot() -> None:
     settings = Settings(robokassa_test_mode=True, _env_file=None)
+    store = AsyncMock()
     app = create_web_app(
         settings,
-        cast(Store, AsyncMock()),
+        cast(Store, store),
         cast(RobokassaClient, AsyncMock()),
         None,
     )
 
     async with TestClient(TestServer(app)) as client:
-        response = await client.get("/payments/robokassa/success")
-        body = await response.text()
+        response = await client.get("/payments/robokassa/success", allow_redirects=False)
 
-    assert response.status == 200
-    assert "Тестовая оплата завершена" in body
-    assert "Деньги не списаны" in body
+    assert response.status == 302
+    assert response.headers["Location"] == "https://t.me/money_profile_bot"
+    store.accept_payment_callback.assert_not_awaited()

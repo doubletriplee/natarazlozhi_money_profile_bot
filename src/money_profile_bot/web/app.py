@@ -235,26 +235,8 @@ def create_web_app(
             delivery.notify()
         return web.Response(text=f"OK{invoice_id}", content_type="text/plain")
 
-    async def payment_result2(_: web.Request) -> web.Response:
-        if settings.payment_mode is not PaymentMode.ROBOKASSA:
-            raise web.HTTPNotFound()
-        # ResultURL2 is not trusted to authorize delivery. Refund data is queried through OpStateExt.
-        return web.Response(status=204)
-
     async def payment_success(_: web.Request) -> web.Response:
-        if settings.robokassa_test_mode:
-            title = "Тестовая оплата завершена"
-            opening = (
-                "Тестовая платёжная страница закрыта. Деньги не списаны. "
-                "Подтверждение может занять несколько секунд."
-            )
-        else:
-            title = "Платёж принят"
-            opening = "Платёжная страница закрыта. Подтверждение может занять несколько секунд."
-        body = f"""<p>{opening}</p>
-<p>Вернитесь в Telegram: результат будет отправлен автоматически. Также можно использовать
- команду <code>/profile</code>.</p><p><a href="https://t.me/{html.escape(settings.bot_username)}">Вернуться в бот</a></p>"""
-        return web.Response(text=_page(title, body), content_type="text/html")
+        raise web.HTTPFound(location=f"https://t.me/{settings.bot_username}")
 
     async def payment_fail(_: web.Request) -> web.Response:
         body = f"""<p>Robokassa не подтвердила оплату. Деньги не должны быть списаны.</p>
@@ -270,7 +252,7 @@ def create_web_app(
     app.router.add_get("/terms", terms)
     app.router.add_get("/consent", consent)
     app.router.add_route("*", "/payments/robokassa/result", payment_result)
-    app.router.add_post("/payments/robokassa/result2", payment_result2)
+    app.router.add_post("/payments/robokassa/result2", payment_result)
     app.router.add_route("*", "/payments/robokassa/success", payment_success)
     app.router.add_route("*", "/payments/robokassa/fail", payment_fail)
     return app

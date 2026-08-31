@@ -133,7 +133,7 @@ class RobokassaClient:
             "OutSum": amount,
             "ExpirationDate": expires.isoformat(),
             "Description": f"Денежный аватар, заказ {order_code}",
-            "MerchantComments": "Выдать результат только после ResultURL",
+            "MerchantComments": "Выдать результат только после подписанного уведомления",
             "UserFields": {"order_code": order_code},
             "InvoiceItems": [
                 {
