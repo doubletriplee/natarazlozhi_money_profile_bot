@@ -195,9 +195,7 @@ class Settings(BaseSettings):
                 if not self.pilot_live_payment_reviewed:
                     pilot_missing.append("PILOT_LIVE_PAYMENT_REVIEWED=true")
                 if len(self.pilot_access_ids) != 1 or self.pilot_access_ids != self.admin_ids:
-                    pilot_missing.append(
-                        "PILOT_ACCESS_TELEGRAM_IDS=single ADMIN_TELEGRAM_IDS"
-                    )
+                    pilot_missing.append("PILOT_ACCESS_TELEGRAM_IDS=single ADMIN_TELEGRAM_IDS")
             if not self.app_encryption_key:
                 pilot_missing.append("APP_ENCRYPTION_KEY")
             if not self.lookup_hmac_key:
