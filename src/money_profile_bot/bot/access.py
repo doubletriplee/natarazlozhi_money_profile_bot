@@ -7,9 +7,10 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 
-class StagingAccessMiddleware(BaseMiddleware):
-    def __init__(self, allowed_user_ids: frozenset[int]) -> None:
+class PrivateAccessMiddleware(BaseMiddleware):
+    def __init__(self, allowed_user_ids: frozenset[int], denial_text: str) -> None:
         self.allowed_user_ids = allowed_user_ids
+        self.denial_text = denial_text
 
     async def __call__(
         self,
@@ -19,10 +20,9 @@ class StagingAccessMiddleware(BaseMiddleware):
     ) -> Any:
         user = data.get("event_from_user")
         if user is not None and user.id not in self.allowed_user_ids:
-            text = "Тестовый бот закрыт. Доступ предоставляется владельцем."
             if isinstance(event, CallbackQuery):
-                await event.answer(text, show_alert=True)
+                await event.answer(self.denial_text, show_alert=True)
             elif isinstance(event, Message):
-                await event.answer(text)
+                await event.answer(self.denial_text)
             return None
         return await handler(event, data)

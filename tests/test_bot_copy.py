@@ -416,6 +416,39 @@ async def test_robokassa_buy_requests_receipt_email() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_robokassa_buy_is_blocked_while_payments_are_paused() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=False,
+        live_payments_enabled=False,
+        _env_file=None,
+    )
+    store = AsyncMock()
+    store.profile_access.return_value = SimpleNamespace(
+        profile_id="profile-1",
+        order_id=None,
+        order_status=None,
+        payment_url=None,
+        order_code=None,
+    )
+    router = build_router(settings, store, AsyncMock(), AsyncMock(), AsyncMock())
+    handler = next(
+        item.callback for item in router.callback_query.handlers if item.callback.__name__ == "buy"
+    )
+    callback = AsyncMock()
+    callback.data = "buy:profile-1"
+    callback.from_user.id = 123456
+    state = AsyncMock()
+
+    await handler(callback, state)
+
+    state.clear.assert_awaited_once()
+    state.set_state.assert_not_awaited()
+    store.create_order.assert_not_awaited()
+    assert "Оплата временно приостановлена" in callback.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
 async def test_receipt_email_creates_robokassa_invoice_link() -> None:
     settings = Settings(
         payment_mode=PaymentMode.ROBOKASSA,
@@ -461,6 +494,34 @@ async def test_receipt_email_creates_robokassa_invoice_link() -> None:
     keyboard = message.answer.await_args.kwargs["reply_markup"]
     assert "Тестовый счёт Robokassa готов" in text
     assert keyboard.inline_keyboard[0][0].url == "https://pay.example/order-1"
+
+
+@pytest.mark.asyncio
+async def test_live_payment_pause_is_rechecked_before_invoice_creation() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=False,
+        live_payments_enabled=False,
+        _env_file=None,
+    )
+    store = AsyncMock()
+    router = build_router(settings, store, AsyncMock(), AsyncMock(), AsyncMock())
+    handler = next(
+        item.callback
+        for item in router.message.handlers
+        if item.callback.__name__ == "payment_email"
+    )
+    message = AsyncMock()
+    message.from_user.id = 123456
+    message.text = "buyer@example.ru"
+    state = AsyncMock()
+
+    await handler(message, state)
+
+    state.clear.assert_awaited_once()
+    state.get_data.assert_not_awaited()
+    store.create_order.assert_not_awaited()
+    assert "Оплата временно приостановлена" in message.answer.await_args.args[0]
 
 
 @pytest.mark.asyncio

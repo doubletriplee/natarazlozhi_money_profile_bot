@@ -92,9 +92,29 @@ elif [[ "$app_env" == "staging" && "$payment_mode" == "robokassa" && "$robokassa
     [[ -n "$test_access_ids" ]] || { echo "Staging requires TEST_ACCESS_TELEGRAM_IDS." >&2; exit 1; }
     [[ -n "$test_password1" ]] || { echo "Staging requires ROBOKASSA_TEST_PASSWORD1." >&2; exit 1; }
     [[ -n "$test_password2" ]] || { echo "Staging requires ROBOKASSA_TEST_PASSWORD2." >&2; exit 1; }
+elif [[ "$app_env" == "pilot" && "$payment_mode" == "robokassa" && "$robokassa_test_mode" == "false" ]]; then
+    pilot_access_ids="$(sed -n 's/^PILOT_ACCESS_TELEGRAM_IDS=//p' .env | tail -n 1)"
+    password1="$(sed -n 's/^ROBOKASSA_PASSWORD1=//p' .env | tail -n 1)"
+    password2="$(sed -n 's/^ROBOKASSA_PASSWORD2=//p' .env | tail -n 1)"
+    password3="$(sed -n 's/^ROBOKASSA_PASSWORD3=//p' .env | tail -n 1)"
+    live_payments_enabled="$(sed -n 's/^LIVE_PAYMENTS_ENABLED=//p' .env | tail -n 1)"
+    platform_risk_acknowledged="$(sed -n 's/^PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=//p' .env | tail -n 1)"
+    [[ -n "$pilot_access_ids" ]] || { echo "Pilot requires PILOT_ACCESS_TELEGRAM_IDS." >&2; exit 1; }
+    [[ -n "$password1" ]] || { echo "Pilot requires ROBOKASSA_PASSWORD1." >&2; exit 1; }
+    [[ -n "$password2" ]] || { echo "Pilot requires ROBOKASSA_PASSWORD2." >&2; exit 1; }
+    [[ -n "$password3" ]] || { echo "Pilot requires ROBOKASSA_PASSWORD3." >&2; exit 1; }
+    [[ "$live_payments_enabled" == "false" ]] || {
+        echo "Pilot deployment currently requires LIVE_PAYMENTS_ENABLED=false." >&2
+        echo "Real invoice creation remains blocked until the remaining pilot safety fixes are complete." >&2
+        exit 1
+    }
+    [[ "$platform_risk_acknowledged" == "true" ]] || {
+        echo "Pilot requires PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=true." >&2
+        exit 1
+    }
 else
-    echo "Deployment allows only test/fake or private staging/robokassa with ROBOKASSA_TEST_MODE=true." >&2
-    echo "Real payments require the separate release-gate process." >&2
+    echo "Deployment allows only test/fake, private staging/test Robokassa, or private pilot/live Robokassa." >&2
+    echo "Public production remains blocked by the release-gate process." >&2
     exit 1
 fi
 

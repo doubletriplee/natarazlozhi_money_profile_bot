@@ -14,6 +14,7 @@ class Environment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
     STAGING = "staging"
+    PILOT = "pilot"
     PRODUCTION = "production"
 
 
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     support_username: str = "simnatali"
     admin_telegram_ids: str = ""
     test_access_telegram_ids: str = ""
+    pilot_access_telegram_ids: str = ""
     bootstrap_admin_on_first_start: bool = False
     product_price_rub: Decimal = Field(default=Decimal("149.00"), gt=0)
     payment_mode: PaymentMode = PaymentMode.FAKE
@@ -54,6 +56,7 @@ class Settings(BaseSettings):
     robokassa_test_password2: str = ""
     robokassa_test_mode: bool = True
     robokassa_hash_algorithm: str = "sha256"
+    live_payments_enabled: bool = False
     payment_platform_risk_acknowledged: bool = False
 
     database_url: str = "sqlite+aiosqlite:///./runtime/money_profile.sqlite3"
@@ -145,6 +148,54 @@ class Settings(BaseSettings):
                 )
             return self
 
+        if self.app_env is Environment.PILOT:
+            pilot_missing: list[str] = []
+            if not self.web_only and not self.bot_token:
+                pilot_missing.append("BOT_TOKEN")
+            if not self.admin_ids:
+                pilot_missing.append("ADMIN_TELEGRAM_IDS")
+            if not self.pilot_access_ids:
+                pilot_missing.append("PILOT_ACCESS_TELEGRAM_IDS")
+            if self.bootstrap_admin_on_first_start:
+                pilot_missing.append("BOOTSTRAP_ADMIN_ON_FIRST_START=false")
+            if self.legal_docs_version.upper() == "DRAFT":
+                pilot_missing.append("LEGAL_DOCS_VERSION")
+            if not self.operator_name:
+                pilot_missing.append("OPERATOR_NAME")
+            if not self.operator_inn:
+                pilot_missing.append("OPERATOR_INN")
+            if not self.operator_email:
+                pilot_missing.append("OPERATOR_EMAIL")
+            if self.source_commit == "development" or len(self.source_commit) < 7:
+                pilot_missing.append("SOURCE_COMMIT")
+            if self.payment_retention_days <= 0:
+                pilot_missing.append("PAYMENT_RETENTION_DAYS")
+            if not self.methodology_approved:
+                pilot_missing.append("METHODOLOGY_APPROVED")
+            if self.payment_mode is not PaymentMode.ROBOKASSA:
+                pilot_missing.append("PAYMENT_MODE=robokassa")
+            if self.robokassa_test_mode:
+                pilot_missing.append("ROBOKASSA_TEST_MODE=false")
+            if not self.robokassa_merchant_login:
+                pilot_missing.append("ROBOKASSA_MERCHANT_LOGIN")
+            if not self.robokassa_password1:
+                pilot_missing.append("ROBOKASSA_PASSWORD1")
+            if not self.robokassa_password2:
+                pilot_missing.append("ROBOKASSA_PASSWORD2")
+            if not self.robokassa_password3:
+                pilot_missing.append("ROBOKASSA_PASSWORD3")
+            if not self.payment_platform_risk_acknowledged:
+                pilot_missing.append("PAYMENT_PLATFORM_RISK_ACKNOWLEDGED")
+            if not self.app_encryption_key:
+                pilot_missing.append("APP_ENCRYPTION_KEY")
+            if not self.lookup_hmac_key:
+                pilot_missing.append("LOOKUP_HMAC_KEY")
+            if not self.backup_encryption_key:
+                pilot_missing.append("BACKUP_ENCRYPTION_KEY")
+            if pilot_missing:
+                raise ValueError("pilot configuration is incomplete: " + ", ".join(pilot_missing))
+            return self
+
         missing: list[str] = []
         if not self.web_only and not self.bot_token:
             missing.append("BOT_TOKEN")
@@ -200,6 +251,10 @@ class Settings(BaseSettings):
     def test_access_ids(self) -> frozenset[int]:
         return self._parse_id_list(self.test_access_telegram_ids)
 
+    @property
+    def pilot_access_ids(self) -> frozenset[int]:
+        return self._parse_id_list(self.pilot_access_telegram_ids)
+
     @staticmethod
     def _parse_id_list(raw: str) -> frozenset[int]:
         result: set[int] = set()
@@ -224,6 +279,12 @@ class Settings(BaseSettings):
         if self.robokassa_test_mode:
             return self.robokassa_test_password2
         return self.robokassa_password2
+
+    @property
+    def robokassa_invoice_creation_enabled(self) -> bool:
+        return self.payment_mode is PaymentMode.ROBOKASSA and (
+            self.robokassa_test_mode or self.live_payments_enabled
+        )
 
     @property
     def source_url(self) -> str:

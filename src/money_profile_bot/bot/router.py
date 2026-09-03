@@ -1079,6 +1079,13 @@ def build_router(
                 delivery.notify()
             return
         if settings.payment_mode is PaymentMode.ROBOKASSA:
+            if not settings.robokassa_invoice_creation_enabled:
+                await state.clear()
+                await callback.answer(
+                    "Оплата временно приостановлена. Новые счета не создаются.",
+                    show_alert=True,
+                )
+                return
             if (
                 access.order_status == OrderStatus.INVOICE_CREATED
                 and access.payment_url
@@ -1131,6 +1138,13 @@ def build_router(
             await state.clear()
             await message.answer(
                 "Создание счёта сейчас недоступно. Вернись к покупке через /profile."
+            )
+            return
+        if not settings.robokassa_invoice_creation_enabled:
+            await state.clear()
+            await message.answer(
+                f"Оплата временно приостановлена. Новые счета не создаются. "
+                f"Попробуй позже или напиши @{settings.support_username}."
             )
             return
         email = (message.text or "").strip()

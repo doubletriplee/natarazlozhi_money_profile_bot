@@ -115,3 +115,44 @@ def test_staging_requires_test_robokassa_and_private_access() -> None:
         Settings(**(required | {"payment_mode": PaymentMode.FAKE}))
     with pytest.raises(ValidationError, match="ROBOKASSA_TEST_MODE=true"):
         Settings(**(required | {"robokassa_test_mode": False}))
+
+
+def test_pilot_requires_live_robokassa_and_private_access() -> None:
+    required = {
+        "app_env": Environment.PILOT,
+        "bot_token": "123:test",
+        "admin_telegram_ids": "10001",
+        "pilot_access_telegram_ids": "10001, 20002",
+        "bootstrap_admin_on_first_start": False,
+        "source_commit": "abcdef1",
+        "payment_mode": PaymentMode.ROBOKASSA,
+        "robokassa_merchant_login": "demo",
+        "robokassa_password1": "live-pass-1",
+        "robokassa_password2": "live-pass-2",
+        "robokassa_password3": "live-pass-3",
+        "robokassa_test_mode": False,
+        "payment_platform_risk_acknowledged": True,
+        "app_encryption_key": key(),
+        "lookup_hmac_key": key(),
+        "backup_encryption_key": key(),
+        "_env_file": None,
+    }
+    settings = Settings(**required)
+
+    assert settings.app_env is Environment.PILOT
+    assert settings.pilot_access_ids == frozenset({10001, 20002})
+    assert not settings.robokassa_invoice_creation_enabled
+    assert settings.active_robokassa_password1 == "live-pass-1"
+    assert settings.active_robokassa_password2 == "live-pass-2"
+
+    enabled = Settings(**(required | {"live_payments_enabled": True}))
+    assert enabled.robokassa_invoice_creation_enabled
+
+    with pytest.raises(ValidationError, match="PILOT_ACCESS_TELEGRAM_IDS"):
+        Settings(**(required | {"pilot_access_telegram_ids": ""}))
+    with pytest.raises(ValidationError, match="ROBOKASSA_TEST_MODE=false"):
+        Settings(**(required | {"robokassa_test_mode": True}))
+    with pytest.raises(ValidationError, match="ROBOKASSA_PASSWORD3"):
+        Settings(**(required | {"robokassa_password3": ""}))
+    with pytest.raises(ValidationError, match="PAYMENT_PLATFORM_RISK_ACKNOWLEDGED"):
+        Settings(**(required | {"payment_platform_risk_acknowledged": False}))

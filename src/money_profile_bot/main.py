@@ -12,7 +12,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiohttp import web
 
-from money_profile_bot.bot.access import StagingAccessMiddleware
+from money_profile_bot.bot.access import PrivateAccessMiddleware
 from money_profile_bot.bot.router import build_router, form_reminder_payload, set_commands
 from money_profile_bot.bot.storage import EncryptedDatabaseStorage
 from money_profile_bot.config import Environment, Settings, ensure_runtime_directories
@@ -99,8 +99,14 @@ async def serve() -> None:
                 )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
             dispatcher = Dispatcher(storage=storage)
-            if settings.app_env is Environment.STAGING:
-                access = StagingAccessMiddleware(settings.test_access_ids)
+            if settings.app_env in {Environment.STAGING, Environment.PILOT}:
+                if settings.app_env is Environment.STAGING:
+                    allowed_ids = settings.test_access_ids
+                    denial_text = "Тестовый бот закрыт. Доступ предоставляется владельцем."
+                else:
+                    allowed_ids = settings.pilot_access_ids
+                    denial_text = "Закрытый пилот недоступен. Доступ предоставляется владельцем."
+                access = PrivateAccessMiddleware(allowed_ids, denial_text)
                 dispatcher.message.outer_middleware(access)
                 dispatcher.callback_query.outer_middleware(access)
             dispatcher.include_router(

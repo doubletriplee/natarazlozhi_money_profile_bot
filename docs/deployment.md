@@ -63,6 +63,43 @@ pwsh -NoProfile -File scripts/configure_staging.ps1 `
 образа. Он не перезапускает сервис. После его успешного завершения обязательно выполняется единый
 штатный деплой из раздела ниже. При ошибке проверки исходный `.env` восстанавливается автоматически.
 
+## Закрытый pilot с боевыми реквизитами
+
+После активации магазина боевые секреты сначала загружаются в закрытую конфигурацию на основе
+`.env.pilot.example`:
+
+- `APP_ENV=pilot`;
+- `PAYMENT_MODE=robokassa` и `ROBOKASSA_TEST_MODE=false`;
+- непустые `ADMIN_TELEGRAM_IDS` и `PILOT_ACCESS_TELEGRAM_IDS`;
+- основные пароли Robokassa №1, №2 и №3;
+- отдельные токен бота, SQLite-база и ключи шифрования;
+- `PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=true`;
+- `LIVE_PAYMENTS_ENABLED=false`.
+
+Настройка выполняется без передачи секретов в аргументах командной строки или Git:
+
+```powershell
+pwsh -NoProfile -File scripts/configure_pilot.ps1 `
+  -BotToken (Read-Host "Pilot bot token" -AsSecureString) `
+  -MerchantLogin your_merchant_login `
+  -Password1 (Read-Host "Robokassa live password #1" -AsSecureString) `
+  -Password2 (Read-Host "Robokassa live password #2" -AsSecureString) `
+  -Password3 (Read-Host "Robokassa live password #3" -AsSecureString) `
+  -TelegramId 123456789 `
+  -BotUsername money_profile_pilot_bot `
+  -AcknowledgePlatformRisk
+```
+
+Сценарий создаёт `.env.before-pilot` с правами `600`, новую базу и новые ключи при первом переходе,
+атомарно обновляет `.env` и проверяет конфигурацию текущим образом. Сервис не перезапускается.
+Следом применяется только `scripts/deploy.ps1`.
+
+На этом подготовительном этапе и конфигуратор, и deploy требуют
+`LIVE_PAYMENTS_ENABLED=false`. Кнопка покупки сообщает о паузе, новые боевые счета не создаются,
+а загрузка рабочих паролей сама по себе не приводит к списанию. Разрешение `true` будет добавлено
+отдельным изменением только после исправления конкурентного возврата, хранения платёжной истории и
+контроля фоновой доставки. Pilot всегда остаётся закрыт allowlist; публичный production запрещён.
+
 На сервере `195.19.7.56` прямой маршрут до Telegram нестабилен. Поэтому Compose запускает
 изолированный SSH/SOCKS-шлюз `telegram-proxy`; только Telegram-сессия бота использует
 `TELEGRAM_PROXY_URL=socks5://telegram-proxy:1080`. На шлюзе отдельному пользователю разрешён
@@ -89,9 +126,10 @@ pwsh -NoProfile -File scripts/deploy.ps1
 секреты и платёжные настройки серверного `.env`. Неотслеживаемые локальные файлы игнорируются и на сервер
 не попадают.
 
-Сценарий разрешает публичный тест `APP_ENV=test`/`PAYMENT_MODE=fake` и закрытый staging
-`APP_ENV=staging`/`PAYMENT_MODE=robokassa` только при `ROBOKASSA_TEST_MODE=true`. Переключение на
-реальные списания через этот сценарий невозможно и требует отдельного выполнения блокировок релиза.
+Сценарий разрешает публичный тест `APP_ENV=test`/`PAYMENT_MODE=fake`, закрытый staging с тестовой
+Robokassa и закрытый pilot с основными реквизитами, обязательным allowlist и
+`LIVE_PAYMENTS_ENABLED=false`. Создание реальных счетов и публичный production через текущую
+версию сценария невозможны и требуют отдельных изменений после выполнения блокировок релиза.
 Production-конфигурация дополнительно требует `PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=true`; значение
 должно храниться только в закрытом серверном env и документирует решение владельца, а не
 совместимость с правилами Telegram.

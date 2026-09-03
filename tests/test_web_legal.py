@@ -84,6 +84,7 @@ async def test_home_page_hides_test_notice_for_live_robokassa() -> None:
     settings = Settings(
         payment_mode=PaymentMode.ROBOKASSA,
         robokassa_test_mode=False,
+        live_payments_enabled=True,
         _env_file=None,
     )
     app = create_web_app(
@@ -99,6 +100,31 @@ async def test_home_page_hides_test_notice_for_live_robokassa() -> None:
 
     assert response.status == 200
     assert "Сейчас действует тестовый режим" not in body
+    assert "Оплата временно приостановлена" not in body
+
+
+@pytest.mark.asyncio
+async def test_home_page_discloses_paused_live_payments() -> None:
+    settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=False,
+        live_payments_enabled=False,
+        _env_file=None,
+    )
+    app = create_web_app(
+        settings,
+        cast(Store, AsyncMock()),
+        cast(RobokassaClient, AsyncMock()),
+        None,
+    )
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/")
+        body = await response.text()
+
+    assert response.status == 200
+    assert "Оплата временно приостановлена" in body
+    assert "Новые счета не создаются" in body
 
 
 @pytest.mark.asyncio

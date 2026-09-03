@@ -54,6 +54,11 @@ def _home_page(settings: Settings) -> str:
 <strong>Сейчас действует тестовый режим.</strong>
 Списание денег и покупка не происходят. Актуальный сценарий доступен в Telegram-боте.
 </aside>"""
+    elif not settings.live_payments_enabled:
+        test_notice = """<aside class="test-notice" aria-label="Оплата приостановлена">
+<strong>Оплата временно приостановлена.</strong>
+Новые счета не создаются. Закрытый пилот доступен только приглашённым участникам.
+</aside>"""
 
     operator = performer_body(settings)
 
