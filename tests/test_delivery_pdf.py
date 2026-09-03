@@ -14,6 +14,7 @@ from money_profile_bot.services.avatar import (
     STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     avatar_paid_caption,
+    avatar_paid_caption_parts,
     strength_offer_caption,
 )
 from money_profile_bot.services.delivery import FULL_READING_TRIGGER_TEXT, DeliveryWorker
@@ -71,6 +72,28 @@ async def test_paid_avatar_is_sent_as_photo_with_complete_text() -> None:
     bot.send_message.assert_not_awaited()
     store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=42)
     store.complete_delivery_if_ready.assert_awaited_once_with("order-1")
+
+
+@pytest.mark.asyncio
+async def test_long_paid_avatar_is_continued_without_truncating_approved_copy() -> None:
+    bot, store, worker = _worker_context("avatar_result")
+    context = list(store.delivery_context.return_value)
+    context[3] = SimpleNamespace(money_type="Муза")
+    store.delivery_context.return_value = tuple(context)
+
+    await worker.deliver("order-1")
+
+    parts = avatar_paid_caption_parts("Муза")
+    assert len(parts) == 2
+    assert "\n\n".join(parts) == avatar_paid_caption("Муза")
+    assert bot.send_photo.await_args.kwargs["caption"] == parts[0]
+    assert bot.send_photo.await_args.kwargs["reply_markup"] is None
+    assert bot.send_message.await_args.args == (123456, parts[1])
+    button = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert button.text == FULL_READING_TRIGGER_TEXT
+    store.mark_delivery_item.assert_awaited_once_with(
+        1, status=DeliveryStatus.SENT, message_id=43
+    )
 
 
 @pytest.mark.asyncio

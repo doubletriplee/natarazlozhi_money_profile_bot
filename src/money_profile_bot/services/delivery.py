@@ -7,14 +7,14 @@ from decimal import Decimal
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from money_profile_bot.config import PaymentMode
 from money_profile_bot.models import DeliveryStatus
 from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
     AvatarAssets,
-    avatar_paid_caption,
+    avatar_paid_caption_parts,
     sales_telegram_url,
     strength_offer_caption,
 )
@@ -82,11 +82,10 @@ class DeliveryWorker:
                 continue
             try:
                 if item.kind == "avatar_result":
-                    sent = await self.bot.send_photo(
+                    sent = await self._send_paid_avatar(
                         telegram_id,
-                        FSInputFile(self.avatars.free_image(result.money_type)),
-                        caption=avatar_paid_caption(result.money_type),
-                        reply_markup=self._full_reading_trigger_keyboard(order.id),
+                        money_type=result.money_type,
+                        order_id=order.id,
                     )
                 elif item.kind == "full_reading_offer":
                     sent = await self.bot.send_photo(
@@ -236,11 +235,29 @@ class DeliveryWorker:
             ]
         )
 
+    async def _send_paid_avatar(
+        self, telegram_id: int, *, money_type: str, order_id: str
+    ) -> Message:
+        parts = avatar_paid_caption_parts(money_type)
+        keyboard = self._full_reading_trigger_keyboard(order_id)
+        sent = await self.bot.send_photo(
+            telegram_id,
+            FSInputFile(self.avatars.free_image(money_type)),
+            caption=parts[0],
+            reply_markup=keyboard if len(parts) == 1 else None,
+        )
+        for index, part in enumerate(parts[1:], start=1):
+            sent = await self.bot.send_message(
+                telegram_id,
+                part,
+                reply_markup=keyboard if index == len(parts) - 1 else None,
+            )
+        return sent
+
     async def send_copy(self, order_id: str) -> None:
         order, telegram_id, _birth, result, _ = await self.store.delivery_context(order_id)
-        await self.bot.send_photo(
+        await self._send_paid_avatar(
             telegram_id,
-            FSInputFile(self.avatars.free_image(result.money_type)),
-            caption=avatar_paid_caption(result.money_type),
-            reply_markup=self._full_reading_trigger_keyboard(order.id),
+            money_type=result.money_type,
+            order_id=order.id,
         )
