@@ -70,13 +70,14 @@ class Settings(BaseSettings):
     source_repository_url: str = "https://github.com/doubletriplee/natarazlozhi_money_profile_bot"
     source_commit: str = "development"
 
-    legal_docs_version: str = "2026-08-31.1"
+    legal_docs_version: str = "2026-09-03.1"
     methodology_approved: bool = True
     golden_cards_approved: bool = False
     operator_name: str = "Симоненко Наталья Сергеевна"
     operator_inn: str = "026108860870"
     operator_email: str = "simonenkons@ya.ru"
-    payment_retention_days: int = Field(default=30, ge=0)
+    payment_contact_retention_days: int = Field(default=30, ge=1)
+    payment_record_retention_years: int = Field(default=5, ge=5)
     profile_draft_retention_days: int = Field(default=30, ge=1)
     backup_retention_days: int = Field(default=14, ge=1)
 
@@ -168,8 +169,6 @@ class Settings(BaseSettings):
                 pilot_missing.append("OPERATOR_EMAIL")
             if self.source_commit == "development" or len(self.source_commit) < 7:
                 pilot_missing.append("SOURCE_COMMIT")
-            if self.payment_retention_days <= 0:
-                pilot_missing.append("PAYMENT_RETENTION_DAYS")
             if not self.methodology_approved:
                 pilot_missing.append("METHODOLOGY_APPROVED")
             if self.payment_mode is not PaymentMode.ROBOKASSA:
@@ -213,8 +212,6 @@ class Settings(BaseSettings):
             missing.append("OPERATOR_EMAIL")
         if self.source_commit == "development" or len(self.source_commit) < 7:
             missing.append("SOURCE_COMMIT")
-        if self.payment_retention_days <= 0:
-            missing.append("PAYMENT_RETENTION_DAYS")
         if not self.methodology_approved:
             missing.append("METHODOLOGY_APPROVED")
         if not self.golden_cards_approved:

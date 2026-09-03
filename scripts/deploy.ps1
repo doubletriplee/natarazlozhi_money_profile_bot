@@ -95,11 +95,22 @@ try {
     $envExamplePath = Join-Path $repositoryRoot ".env.example"
     $legalDocsVersion = Read-EnvExampleValue -Path $envExamplePath -Name "LEGAL_DOCS_VERSION"
     $operatorEmail = Read-EnvExampleValue -Path $envExamplePath -Name "OPERATOR_EMAIL"
+    $paymentContactRetentionDays = Read-EnvExampleValue -Path $envExamplePath -Name "PAYMENT_CONTACT_RETENTION_DAYS"
+    $paymentRecordRetentionYears = Read-EnvExampleValue -Path $envExamplePath -Name "PAYMENT_RECORD_RETENTION_YEARS"
     if ($legalDocsVersion -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+$') {
         throw "LEGAL_DOCS_VERSION has an invalid release format."
     }
     if ($operatorEmail -notmatch '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$') {
         throw "OPERATOR_EMAIL has an invalid format."
+    }
+    if ($paymentContactRetentionDays -notmatch '^[1-9][0-9]*$') {
+        throw "PAYMENT_CONTACT_RETENTION_DAYS must be a positive integer."
+    }
+    if (
+        $paymentRecordRetentionYears -notmatch '^[1-9][0-9]*$' -or
+        [int]$paymentRecordRetentionYears -lt 5
+    ) {
+        throw "PAYMENT_RECORD_RETENTION_YEARS must be an integer of at least 5."
     }
     $composeBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($composePath))
     $scriptBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($remoteScriptPath))
@@ -112,7 +123,7 @@ try {
         "printf '%s' '$composeBase64' | base64 -d > '$stagingDirectory/compose.yaml'"
         "printf '%s' '$scriptBase64' | base64 -d > '$stagingDirectory/deploy_remote.sh'"
         "chmod 700 '$stagingDirectory/deploy_remote.sh'"
-        "exec bash '$stagingDirectory/deploy_remote.sh' '$commit' '$RemoteDirectory' '$HealthUrl' '$stagingDirectory/compose.yaml' '$legalDocsVersion' '$operatorEmail'"
+        "exec bash '$stagingDirectory/deploy_remote.sh' '$commit' '$RemoteDirectory' '$HealthUrl' '$stagingDirectory/compose.yaml' '$legalDocsVersion' '$operatorEmail' '$paymentContactRetentionDays' '$paymentRecordRetentionYears'"
     ) -join "; "
 
     Write-Host "Deploying the same commit through one SSH session..."

@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import case, delete, func, or_, select, text, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -1239,12 +1239,37 @@ class Store:
                 await session.execute(delete(FormReminder).where(FormReminder.id.in_(reminder_ids)))
             return len(record_ids) + len(reminder_ids)
 
-    async def cleanup_expired_payment_data(self, older_than: datetime) -> int:
-        """Remove an expired payment journal and scrub its order-side contact data."""
+    async def cleanup_expired_payment_contacts(self, older_than: datetime) -> int:
+        """Scrub expired contact and temporary provider data but keep the payment journal."""
         async with self.sessions() as session, session.begin():
             payments = list(
                 (
-                    await session.scalars(select(Payment).where(Payment.received_at < older_than))
+                    await session.scalars(
+                        select(Payment)
+                        .join(Order, Payment.order_id == Order.id)
+                        .where(
+                            Payment.received_at < older_than,
+                            or_(
+                                Order.provider_invoice_uuid.is_not(None),
+                                Order.payment_url.is_not(None),
+                                Order.receipt_email_encrypted.not_in(("expired", "deleted")),
+                                Order.refund_confirmation_hash.is_not(None),
+                                Order.refund_confirmation_expires_at.is_not(None),
+                                Payment.notification_email_encrypted.is_not(None),
+                                and_(
+                                    or_(
+                                        Payment.refund_status.is_(None),
+                                        Payment.refund_status == "finished",
+                                    ),
+                                    or_(
+                                        Payment.provider_operation_encrypted.is_not(None),
+                                        Payment.provider_payment_method.is_not(None),
+                                        Payment.refund_request_id.is_not(None),
+                                    ),
+                                ),
+                            ),
+                        )
+                    )
                 ).all()
             )
             if not payments:
@@ -1258,11 +1283,73 @@ class Store:
                 .values(
                     provider_invoice_uuid=None,
                     payment_url=None,
-                    receipt_email_encrypted="expired",
+                    receipt_email_encrypted=case(
+                        (Order.receipt_email_encrypted == "deleted", "deleted"),
+                        else_="expired",
+                    ),
                     refund_confirmation_hash=None,
                     refund_confirmation_expires_at=None,
                 )
             )
+            await session.execute(
+                update(Payment)
+                .where(Payment.id.in_(payment_ids))
+                .values(notification_email_encrypted=None)
+            )
+            await session.execute(
+                update(Payment)
+                .where(
+                    Payment.id.in_(payment_ids),
+                    or_(
+                        Payment.refund_status.is_(None),
+                        Payment.refund_status == "finished",
+                    ),
+                )
+                .values(
+                    provider_operation_encrypted=None,
+                    provider_payment_method=None,
+                    refund_request_id=None,
+                )
+            )
+            return len(payment_ids)
+
+    async def cleanup_expired_test_payments(self, older_than: datetime) -> int:
+        """Remove test payment rows after their short operational retention period."""
+        async with self.sessions() as session, session.begin():
+            payment_ids = list(
+                (
+                    await session.scalars(
+                        select(Payment.id).where(Payment.received_at < older_than)
+                    )
+                ).all()
+            )
+            if not payment_ids:
+                return 0
+            await session.execute(delete(Payment).where(Payment.id.in_(payment_ids)))
+            return len(payment_ids)
+
+    async def cleanup_expired_anonymized_payment_records(self, older_than: datetime) -> int:
+        """Remove an old real-payment journal only after the related profile was deleted."""
+        async with self.sessions() as session, session.begin():
+            payment_ids = list(
+                (
+                    await session.scalars(
+                        select(Payment.id)
+                        .join(Order, Payment.order_id == Order.id)
+                        .join(Profile, Order.profile_id == Profile.id)
+                        .where(
+                            Payment.received_at < older_than,
+                            Profile.deleted_at.is_not(None),
+                            or_(
+                                Payment.refund_status.is_(None),
+                                Payment.refund_status == "finished",
+                            ),
+                        )
+                    )
+                ).all()
+            )
+            if not payment_ids:
+                return 0
             await session.execute(delete(Payment).where(Payment.id.in_(payment_ids)))
             return len(payment_ids)
 
@@ -1351,7 +1438,13 @@ class Store:
                 await session.execute(
                     update(Order)
                     .where(Order.profile_id.in_(profile_ids))
-                    .values(receipt_email_encrypted="deleted")
+                    .values(
+                        provider_invoice_uuid=None,
+                        payment_url=None,
+                        receipt_email_encrypted="deleted",
+                        refund_confirmation_hash=None,
+                        refund_confirmation_expires_at=None,
+                    )
                 )
                 await session.execute(
                     update(DeliveryItem)

@@ -38,8 +38,9 @@ def test_development_settings_generate_keys() -> None:
     settings = Settings(_env_file=None)
     assert settings.product_price_minor == 14900
     assert settings.payment_mode is PaymentMode.FAKE
-    assert settings.payment_retention_days == 30
-    assert settings.legal_docs_version == "2026-08-31.1"
+    assert settings.payment_contact_retention_days == 30
+    assert settings.payment_record_retention_years == 5
+    assert settings.legal_docs_version == "2026-09-03.1"
     assert settings.operator_name == "Симоненко Наталья Сергеевна"
     assert settings.operator_inn == "026108860870"
     assert settings.operator_email == "simonenkons@ya.ru"
@@ -56,6 +57,11 @@ def test_production_rejects_incomplete_configuration() -> None:
 def test_invalid_robokassa_algorithm_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(robokassa_hash_algorithm="crc32", _env_file=None)
+
+
+def test_real_payment_records_cannot_be_configured_below_five_years() -> None:
+    with pytest.raises(ValidationError):
+        Settings(payment_record_retention_years=4, _env_file=None)
 
 
 def test_production_rejects_fake_payment_mode() -> None:

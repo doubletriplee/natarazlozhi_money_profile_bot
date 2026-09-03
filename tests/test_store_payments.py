@@ -252,17 +252,22 @@ async def test_delete_removes_personal_profile_but_keeps_payment_journal(
     store: tuple[Store, Database], birth: BirthData
 ) -> None:
     service, database = store
-    _, invoice_id, _ = await prepared_order(service, birth)
+    order_id, invoice_id, _ = await prepared_order(service, birth)
     await service.accept_payment_callback(invoice_id=invoice_id, amount_minor=14900, email=None)
     assert await service.delete_personal_data(10001) == []
     assert await service.profile_access(10001) is None
     assert await service.pending_order_ids() == []
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+        order = await session.get(Order, order_id)
+        assert order is not None
+        assert order.provider_invoice_uuid is None
+        assert order.payment_url is None
+        assert order.receipt_email_encrypted == "deleted"
 
 
 @pytest.mark.asyncio
-async def test_expired_payment_data_is_removed_without_revoking_profile_access(
+async def test_expired_payment_contacts_are_scrubbed_before_test_journal_is_removed(
     store: tuple[Store, Database], birth: BirthData
 ) -> None:
     service, database = store
@@ -294,15 +299,25 @@ async def test_expired_payment_data_is_removed_without_revoking_profile_access(
         )
 
     cutoff = datetime.now(UTC) - timedelta(days=30)
-    assert await service.cleanup_expired_payment_data(cutoff) == 1
-    assert await service.cleanup_expired_payment_data(cutoff) == 0
+    assert await service.cleanup_expired_payment_contacts(cutoff) == 1
+    assert await service.cleanup_expired_payment_contacts(cutoff) == 0
 
     access = await service.profile_access(10001)
     assert access is not None
     assert access.profile_id == profile_id
     assert access.order_status == OrderStatus.PAID
     async with database.sessions() as session:
-        assert await session.scalar(select(func.count()).select_from(Payment)) == 0
+        assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+        payment = await session.scalar(select(Payment).where(Payment.order_id == order_id))
+        assert payment is not None
+        assert payment.amount_minor == 14900
+        assert payment.currency == "RUB"
+        assert payment.provider_operation_hash == "operation-hash"
+        assert payment.provider_operation_encrypted is None
+        assert payment.provider_payment_method is None
+        assert payment.notification_email_encrypted is None
+        assert payment.refund_request_id is None
+        assert payment.refund_status == "finished"
         order = await session.get(Order, order_id)
         assert order is not None
         assert order.provider_invoice_uuid is None
@@ -310,6 +325,66 @@ async def test_expired_payment_data_is_removed_without_revoking_profile_access(
         assert order.receipt_email_encrypted == "expired"
         assert order.refund_confirmation_hash is None
         assert order.refund_confirmation_expires_at is None
+
+    assert await service.cleanup_expired_test_payments(cutoff) == 1
+    assert await service.cleanup_expired_test_payments(cutoff) == 0
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(Payment)) == 0
+
+
+@pytest.mark.asyncio
+async def test_old_real_payment_is_removed_only_after_personal_data_deletion(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    order_id, invoice_id, _ = await prepared_order(service, birth)
+    await service.accept_payment_callback(invoice_id=invoice_id, amount_minor=14900, email=None)
+    cutoff = datetime.now(UTC) - timedelta(days=5 * 365)
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(Payment)
+            .where(Payment.order_id == order_id)
+            .values(received_at=cutoff - timedelta(days=2))
+        )
+
+    assert await service.cleanup_expired_anonymized_payment_records(cutoff) == 0
+    assert await service.delete_personal_data(10001) == []
+    assert await service.cleanup_expired_anonymized_payment_records(cutoff) == 1
+    assert await service.cleanup_expired_anonymized_payment_records(cutoff) == 0
+
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(Payment)) == 0
+
+
+@pytest.mark.asyncio
+async def test_unresolved_refund_is_not_removed_after_record_retention_period(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    order_id, invoice_id, _ = await prepared_order(service, birth)
+    await service.accept_payment_callback(invoice_id=invoice_id, amount_minor=14900, email=None)
+    cutoff = datetime.now(UTC) - timedelta(days=5 * 365)
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(Payment)
+            .where(Payment.order_id == order_id)
+            .values(
+                received_at=cutoff - timedelta(days=2),
+                provider_operation_encrypted="encrypted-operation",
+                refund_request_id="refund-request",
+                refund_status="uncertain",
+            )
+        )
+
+    assert await service.delete_personal_data(10001) == []
+    assert await service.cleanup_expired_payment_contacts(cutoff) == 0
+    assert await service.cleanup_expired_anonymized_payment_records(cutoff) == 0
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+        payment = await session.scalar(select(Payment).where(Payment.order_id == order_id))
+        assert payment is not None
+        assert payment.provider_operation_encrypted == "encrypted-operation"
+        assert payment.refund_request_id == "refund-request"
 
 
 @pytest.mark.asyncio

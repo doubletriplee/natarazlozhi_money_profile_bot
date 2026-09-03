@@ -7,6 +7,8 @@ health_url="${3:?health URL is required}"
 staged_compose="${4:?staged Compose file is required}"
 legal_docs_version="${5:?legal documents version is required}"
 operator_email="${6:?operator email is required}"
+payment_contact_retention_days="${7:?payment contact retention is required}"
+payment_record_retention_years="${8:?payment record retention is required}"
 
 if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Invalid commit SHA: $commit" >&2
@@ -26,6 +28,14 @@ if [[ ! "$legal_docs_version" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+$ ]]; then
 fi
 if [[ ! "$operator_email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
     echo "Invalid operator email: $operator_email" >&2
+    exit 2
+fi
+if [[ ! "$payment_contact_retention_days" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid payment contact retention: $payment_contact_retention_days" >&2
+    exit 2
+fi
+if [[ ! "$payment_record_retention_years" =~ ^[1-9][0-9]*$ ]] || (( payment_record_retention_years < 5 )); then
+    echo "Invalid payment record retention: $payment_record_retention_years" >&2
     exit 2
 fi
 expected_staging_directory="/tmp/money-profile-deploy-$commit"
@@ -165,6 +175,9 @@ upsert_env "APP_IMAGE" "$image" "$next_env"
 upsert_env "SOURCE_COMMIT" "$commit" "$next_env"
 upsert_env "LEGAL_DOCS_VERSION" "$legal_docs_version" "$next_env"
 upsert_env "OPERATOR_EMAIL" "$operator_email" "$next_env"
+sed -i '/^PAYMENT_RETENTION_DAYS=/d' "$next_env"
+upsert_env "PAYMENT_CONTACT_RETENTION_DAYS" "$payment_contact_retention_days" "$next_env"
+upsert_env "PAYMENT_RECORD_RETENTION_YEARS" "$payment_record_retention_years" "$next_env"
 chmod 600 "$next_env"
 
 deployment_started=1

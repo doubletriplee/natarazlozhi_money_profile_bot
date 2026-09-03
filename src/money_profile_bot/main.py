@@ -15,7 +15,7 @@ from aiohttp import web
 from money_profile_bot.bot.access import PrivateAccessMiddleware
 from money_profile_bot.bot.router import build_router, form_reminder_payload, set_commands
 from money_profile_bot.bot.storage import EncryptedDatabaseStorage
-from money_profile_bot.config import Environment, Settings, ensure_runtime_directories
+from money_profile_bot.config import Environment, PaymentMode, Settings, ensure_runtime_directories
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
 from money_profile_bot.services.avatar import AvatarAssets
@@ -28,6 +28,13 @@ from money_profile_bot.web.app import create_web_app
 logger = logging.getLogger(__name__)
 
 
+def years_before(value: datetime, years: int) -> datetime:
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:
+        return value.replace(year=value.year - years, day=28)
+
+
 async def maintenance(store: Store, settings: Settings) -> None:
     while True:
         try:
@@ -35,10 +42,14 @@ async def maintenance(store: Store, settings: Settings) -> None:
             draft_cutoff = now - timedelta(days=settings.profile_draft_retention_days)
             await store.cleanup_expired_form_data(draft_cutoff)
             await store.cleanup_expired_drafts(draft_cutoff)
-            if settings.payment_retention_days > 0:
-                payment_cutoff = now - timedelta(days=settings.payment_retention_days)
-                await store.cleanup_expired_unpaid_orders(payment_cutoff)
-                await store.cleanup_expired_payment_data(payment_cutoff)
+            payment_contact_cutoff = now - timedelta(days=settings.payment_contact_retention_days)
+            await store.cleanup_expired_unpaid_orders(payment_contact_cutoff)
+            await store.cleanup_expired_payment_contacts(payment_contact_cutoff)
+            if settings.payment_mode is PaymentMode.FAKE or settings.robokassa_test_mode:
+                await store.cleanup_expired_test_payments(payment_contact_cutoff)
+            else:
+                payment_record_cutoff = years_before(now, settings.payment_record_retention_years)
+                await store.cleanup_expired_anonymized_payment_records(payment_record_cutoff)
         except Exception:
             logger.exception("data retention maintenance failed")
         try:

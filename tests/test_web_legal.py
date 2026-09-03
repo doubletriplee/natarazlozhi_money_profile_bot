@@ -19,7 +19,7 @@ from money_profile_bot.web.app import create_web_app
 
 @pytest.mark.asyncio
 async def test_home_page_describes_products_delivery_operator_and_legal_links() -> None:
-    settings = Settings(payment_retention_days=30, _env_file=None)
+    settings = Settings(_env_file=None)
     app = create_web_app(
         settings,
         cast(Store, AsyncMock()),
@@ -155,10 +155,7 @@ async def test_health_fails_when_delivery_worker_is_not_running() -> None:
 
 @pytest.mark.asyncio
 async def test_legal_pages_render_final_documents_without_test_notice() -> None:
-    settings = Settings(
-        payment_retention_days=30,
-        _env_file=None,
-    )
+    settings = Settings(_env_file=None)
     app = create_web_app(
         settings,
         cast(Store, AsyncMock()),
@@ -182,7 +179,9 @@ async def test_legal_pages_render_final_documents_without_test_notice() -> None:
     assert "simonenkons@ya.ru" in privacy
     assert "simonenkons@ya.ru" in terms
     assert "simonenkons@ya.ru" in consent
-    assert "Редакция от 31 августа 2026 года" in privacy
+    assert "Редакция от 3 сентября 2026 года" in privacy
+    assert "не менее пяти лет" in privacy
+    assert "30 дней" in privacy
     assert "REG.RU" in privacy
     assert "Закрытый тест — оплаты нет" not in privacy
     assert "Сервис работает в закрытом тестовом режиме" not in privacy
