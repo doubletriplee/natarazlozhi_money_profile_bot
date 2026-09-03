@@ -138,6 +138,7 @@ updates = {
     "TEST_ACCESS_TELEGRAM_IDS": "",
     "PILOT_ACCESS_TELEGRAM_IDS": payload["telegram_id"],
     "BOOTSTRAP_ADMIN_ON_FIRST_START": "false",
+    "METHODOLOGY_APPROVED": "true",
     "PAYMENT_MODE": "robokassa",
     "ROBOKASSA_MERCHANT_LOGIN": payload["merchant_login"],
     "ROBOKASSA_PASSWORD1": payload["password1"],
