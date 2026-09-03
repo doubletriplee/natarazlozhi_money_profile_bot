@@ -6,6 +6,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from aiohttp import web
 
+from money_profile_bot.backup_status import backup_status_is_healthy
 from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.robokassa import RobokassaClient
@@ -175,7 +176,11 @@ def create_web_app(
     async def health(_: web.Request) -> web.Response:
         database_healthy = await store.healthcheck()
         delivery_healthy = delivery is None or delivery.is_healthy()
-        healthy = database_healthy and delivery_healthy
+        backup_healthy = not settings.backup_required or backup_status_is_healthy(
+            settings.backup_status_path,
+            max_age_hours=settings.backup_max_age_hours,
+        )
+        healthy = database_healthy and delivery_healthy and backup_healthy
         return web.json_response(
             {
                 "status": "ok" if healthy else "error",
@@ -183,6 +188,13 @@ def create_web_app(
                 "checks": {
                     "database": "ok" if database_healthy else "error",
                     "delivery": "ok" if delivery_healthy else "error",
+                    "backup": (
+                        "ok"
+                        if backup_healthy and settings.backup_required
+                        else "disabled"
+                        if not settings.backup_required
+                        else "error"
+                    ),
                 },
             },
             status=200 if healthy else 503,

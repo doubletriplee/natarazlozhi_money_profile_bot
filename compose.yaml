@@ -9,6 +9,7 @@ services:
     environment:
       AVATAR_ASSET_DIRECTORY: /app/assets/avatars
       PDF_OUTPUT_DIRECTORY: /data/pdfs
+      BACKUP_STATUS_PATH: /data/backups/status.json
     depends_on:
       telegram-proxy:
         condition: service_healthy
@@ -17,11 +18,11 @@ services:
     volumes:
       - ./runtime/data:/data
     cpus: 0.5
-    mem_limit: 384m
+    mem_limit: 768m
     pids_limit: 128
     read_only: true
     tmpfs:
-      - /tmp:size=32m,mode=1777
+      - /tmp:size=256m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -32,6 +33,38 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  backup:
+    image: ${APP_IMAGE:-natarazlozhi-money-profile-bot:local}
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BACKUP_DESTINATION: /data/backups
+      BACKUP_STATUS_PATH: /data/backups/status.json
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-6}
+      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-8}
+    command: ["python", "scripts/backup_worker.py"]
+    volumes:
+      - ./runtime/data:/data
+    cpus: 0.2
+    mem_limit: 768m
+    pids_limit: 32
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "scripts/backup_worker.py", "--check"]
+      interval: 5m
+      timeout: 10s
+      retries: 2
+      start_period: 30s
 
   telegram-proxy:
     image: ${TELEGRAM_PROXY_IMAGE:-money-profile-telegram-proxy:local}

@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from money_profile_bot.config import PaymentMode, Settings
+from money_profile_bot.config import Environment, PaymentMode, Settings
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.robokassa import RobokassaClient
 from money_profile_bot.services.store import Store
@@ -149,8 +149,33 @@ async def test_health_fails_when_delivery_worker_is_not_running() -> None:
     assert body == {
         "status": "error",
         "version": "abcdef1",
-        "checks": {"database": "ok", "delivery": "error"},
+        "checks": {"database": "ok", "delivery": "error", "backup": "disabled"},
     }
+
+
+@pytest.mark.asyncio
+async def test_health_fails_when_required_backup_status_is_missing(tmp_path: Path) -> None:
+    settings = Settings(
+        app_env=Environment.TEST,
+        source_commit="abcdef1",
+        backup_status_path=tmp_path / "missing.json",
+        _env_file=None,
+    )
+    store = AsyncMock()
+    store.healthcheck.return_value = True
+    app = create_web_app(
+        settings,
+        cast(Store, store),
+        cast(RobokassaClient, AsyncMock()),
+        None,
+    )
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/healthz")
+        body = await response.json()
+
+    assert response.status == 503
+    assert body["checks"] == {"database": "ok", "delivery": "ok", "backup": "error"}
 
 
 @pytest.mark.asyncio

@@ -1,22 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import os
+import tempfile
 from pathlib import Path
 
-from backup import decode_key
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from backup import database_integrity, decrypt_backup
 
 
 def restore(source: Path, destination: Path) -> None:
-    raw = source.read_bytes()
-    if raw[:4] != b"MPB1":
-        raise ValueError("unsupported backup format")
-    plaintext = AESGCM(decode_key()).decrypt(raw[4:16], raw[16:], b"money-profile-backup-v1")
+    plaintext = decrypt_backup(source)
     if destination.exists():
         raise FileExistsError("restore destination must not exist")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(plaintext)
-    destination.chmod(0o600)
+    handle, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(handle, "wb") as stream:
+            stream.write(plaintext)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        if not database_integrity(temporary):
+            raise ValueError("restored SQLite integrity check failed")
+        os.link(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

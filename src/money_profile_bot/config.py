@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     payment_record_retention_years: int = Field(default=5, ge=5)
     profile_draft_retention_days: int = Field(default=30, ge=1)
     backup_retention_days: int = Field(default=14, ge=1)
+    backup_interval_hours: int = Field(default=6, ge=1, le=24)
+    backup_max_age_hours: int = Field(default=8, ge=2, le=72)
+    backup_status_path: Path = Path("runtime/backups/status.json")
 
     app_encryption_key: str = ""
     lookup_hmac_key: str = ""
@@ -105,6 +108,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime_safety(self) -> Settings:
+        if self.backup_max_age_hours <= self.backup_interval_hours:
+            raise ValueError("BACKUP_MAX_AGE_HOURS must be greater than BACKUP_INTERVAL_HOURS")
         if self.app_env is Environment.TEST:
             if self.payment_mode is not PaymentMode.FAKE:
                 raise ValueError("test configuration is incomplete: PAYMENT_MODE=fake")
@@ -264,6 +269,10 @@ class Settings(BaseSettings):
     @property
     def product_price_minor(self) -> int:
         return int((self.product_price_rub * 100).quantize(Decimal("1")))
+
+    @property
+    def backup_required(self) -> bool:
+        return self.app_env is not Environment.DEVELOPMENT
 
     @property
     def active_robokassa_password1(self) -> str:
