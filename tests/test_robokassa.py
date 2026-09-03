@@ -138,7 +138,16 @@ async def test_invoice_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) -
 
     payload = post_jwt.await_args.args[1]
     assert payload["Description"] == "Денежный аватар, заказ ORDER-42"
-    assert payload["InvoiceItems"][0]["Name"] == "Индивидуальный разбор «Денежный аватар»"
+    assert payload["InvoiceItems"] == [
+        {
+            "Name": "Индивидуальный разбор «Денежный аватар»",
+            "Quantity": 1,
+            "Cost": 149.0,
+            "Tax": "none",
+            "PaymentMethod": "full_payment",
+            "PaymentObject": "service",
+        }
+    ]
     assert payload["AdditionalParameters"] == {"Email": "buyer@example.ru"}
     assert "UserFields" not in payload
     assert post_jwt.await_args.args[2] == "pass1"
@@ -183,7 +192,17 @@ async def test_refund_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) ->
     await robokassa.refund(operation_key="operation-key", amount_minor=14900, order_code="ORDER-42")
 
     payload = post_jwt.await_args.args[1]
-    assert payload["InvoiceItems"][0]["Name"] == "Денежный аватар, заказ ORDER-42"
+    assert payload["RefundSum"] == 149.0
+    assert payload["InvoiceItems"] == [
+        {
+            "Name": "Денежный аватар, заказ ORDER-42",
+            "Quantity": 1,
+            "Cost": 149.0,
+            "Tax": "none",
+            "PaymentMethod": "full_payment",
+            "PaymentObject": "service",
+        }
+    ]
 
 
 @pytest.mark.asyncio
