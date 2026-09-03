@@ -91,9 +91,7 @@ async def test_long_paid_avatar_is_continued_without_truncating_approved_copy() 
     assert bot.send_message.await_args.args == (123456, parts[1])
     button = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == FULL_READING_TRIGGER_TEXT
-    store.mark_delivery_item.assert_awaited_once_with(
-        1, status=DeliveryStatus.SENT, message_id=43
-    )
+    store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=43)
 
 
 @pytest.mark.asyncio
