@@ -159,8 +159,50 @@ def test_pilot_requires_live_robokassa_and_private_access() -> None:
     assert settings.active_robokassa_password1 == "live-pass-1"
     assert settings.active_robokassa_password2 == "live-pass-2"
 
-    enabled = Settings(**(required | {"live_payments_enabled": True}))
+    enabled = Settings(
+        **(
+            required
+            | {
+                "pilot_access_telegram_ids": "10001",
+                "live_payments_enabled": True,
+                "pilot_live_payment_reviewed": True,
+            }
+        )
+    )
     assert enabled.robokassa_invoice_creation_enabled
+
+    with pytest.raises(ValidationError, match="PILOT_LIVE_PAYMENT_REVIEWED=true"):
+        Settings(
+            **(
+                required
+                | {
+                    "pilot_access_telegram_ids": "10001",
+                    "live_payments_enabled": True,
+                }
+            )
+        )
+    with pytest.raises(ValidationError, match="single ADMIN_TELEGRAM_IDS"):
+        Settings(
+            **(
+                required
+                | {
+                    "live_payments_enabled": True,
+                    "pilot_live_payment_reviewed": True,
+                }
+            )
+        )
+    with pytest.raises(ValidationError, match="single ADMIN_TELEGRAM_IDS"):
+        Settings(
+            **(
+                required
+                | {
+                    "admin_telegram_ids": "30003",
+                    "pilot_access_telegram_ids": "10001",
+                    "live_payments_enabled": True,
+                    "pilot_live_payment_reviewed": True,
+                }
+            )
+        )
 
     with pytest.raises(ValidationError, match="PILOT_ACCESS_TELEGRAM_IDS"):
         Settings(**(required | {"pilot_access_telegram_ids": ""}))

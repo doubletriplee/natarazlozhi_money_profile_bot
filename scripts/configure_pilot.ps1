@@ -149,6 +149,7 @@ updates = {
     "ROBOKASSA_TEST_MODE": "false",
     "ROBOKASSA_HASH_ALGORITHM": "sha256",
     "LIVE_PAYMENTS_ENABLED": "false",
+    "PILOT_LIVE_PAYMENT_REVIEWED": "false",
     "PAYMENT_PLATFORM_RISK_ACKNOWLEDGED": "true",
     "DATABASE_URL": "sqlite+aiosqlite:////data/money_profile_pilot.sqlite3",
 }

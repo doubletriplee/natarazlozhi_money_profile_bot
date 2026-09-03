@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     robokassa_test_mode: bool = True
     robokassa_hash_algorithm: str = "sha256"
     live_payments_enabled: bool = False
+    pilot_live_payment_reviewed: bool = False
     payment_platform_risk_acknowledged: bool = False
 
     database_url: str = "sqlite+aiosqlite:///./runtime/money_profile.sqlite3"
@@ -190,6 +191,13 @@ class Settings(BaseSettings):
                 pilot_missing.append("ROBOKASSA_PASSWORD3")
             if not self.payment_platform_risk_acknowledged:
                 pilot_missing.append("PAYMENT_PLATFORM_RISK_ACKNOWLEDGED")
+            if self.live_payments_enabled:
+                if not self.pilot_live_payment_reviewed:
+                    pilot_missing.append("PILOT_LIVE_PAYMENT_REVIEWED=true")
+                if len(self.pilot_access_ids) != 1 or self.pilot_access_ids != self.admin_ids:
+                    pilot_missing.append(
+                        "PILOT_ACCESS_TELEGRAM_IDS=single ADMIN_TELEGRAM_IDS"
+                    )
             if not self.app_encryption_key:
                 pilot_missing.append("APP_ENCRYPTION_KEY")
             if not self.lookup_hmac_key:

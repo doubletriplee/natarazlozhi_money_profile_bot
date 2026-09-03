@@ -49,6 +49,8 @@ rollback_env="$deploy_directory/.env.rollback-$commit"
 rollback_compose="$deploy_directory/compose.yaml.rollback-$commit"
 next_env="$deploy_directory/.env.next-$commit"
 next_compose="$deploy_directory/compose.yaml.next-$commit"
+pilot_payment_request="$deploy_directory/.pilot-payment-request"
+pilot_payment_request_action=""
 deployment_started=0
 
 restore_previous_release() {
@@ -67,6 +69,9 @@ restore_previous_release() {
 
 cleanup() {
     rm -f -- "$rollback_env" "$rollback_compose" "$next_env" "$next_compose" "$staged_compose"
+    if [[ -n "$pilot_payment_request_action" ]]; then
+        rm -f -- "$pilot_payment_request"
+    fi
     if [[ "$0" == /tmp/money-profile-deploy-*/deploy_remote.sh ]]; then
         rm -f -- "$0"
         rmdir -- "$(dirname -- "$0")" 2>/dev/null || true
@@ -104,24 +109,52 @@ elif [[ "$app_env" == "staging" && "$payment_mode" == "robokassa" && "$robokassa
     [[ -n "$test_password2" ]] || { echo "Staging requires ROBOKASSA_TEST_PASSWORD2." >&2; exit 1; }
 elif [[ "$app_env" == "pilot" && "$payment_mode" == "robokassa" && "$robokassa_test_mode" == "false" ]]; then
     pilot_access_ids="$(sed -n 's/^PILOT_ACCESS_TELEGRAM_IDS=//p' .env | tail -n 1)"
+    admin_ids="$(sed -n 's/^ADMIN_TELEGRAM_IDS=//p' .env | tail -n 1)"
     password1="$(sed -n 's/^ROBOKASSA_PASSWORD1=//p' .env | tail -n 1)"
     password2="$(sed -n 's/^ROBOKASSA_PASSWORD2=//p' .env | tail -n 1)"
     password3="$(sed -n 's/^ROBOKASSA_PASSWORD3=//p' .env | tail -n 1)"
     live_payments_enabled="$(sed -n 's/^LIVE_PAYMENTS_ENABLED=//p' .env | tail -n 1)"
+    pilot_live_payment_reviewed="$(sed -n 's/^PILOT_LIVE_PAYMENT_REVIEWED=//p' .env | tail -n 1)"
     platform_risk_acknowledged="$(sed -n 's/^PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=//p' .env | tail -n 1)"
     [[ -n "$pilot_access_ids" ]] || { echo "Pilot requires PILOT_ACCESS_TELEGRAM_IDS." >&2; exit 1; }
     [[ -n "$password1" ]] || { echo "Pilot requires ROBOKASSA_PASSWORD1." >&2; exit 1; }
     [[ -n "$password2" ]] || { echo "Pilot requires ROBOKASSA_PASSWORD2." >&2; exit 1; }
     [[ -n "$password3" ]] || { echo "Pilot requires ROBOKASSA_PASSWORD3." >&2; exit 1; }
-    [[ "$live_payments_enabled" == "false" ]] || {
-        echo "Pilot deployment currently requires LIVE_PAYMENTS_ENABLED=false." >&2
-        echo "Real invoice creation remains blocked until the remaining pilot safety fixes are complete." >&2
-        exit 1
-    }
     [[ "$platform_risk_acknowledged" == "true" ]] || {
         echo "Pilot requires PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=true." >&2
         exit 1
     }
+    if [[ "$live_payments_enabled" == "true" ]]; then
+        [[ "$pilot_live_payment_reviewed" == "true" ]] || {
+            echo "Live pilot requires PILOT_LIVE_PAYMENT_REVIEWED=true." >&2
+            exit 1
+        }
+        [[ "$pilot_access_ids" =~ ^[1-9][0-9]*$ && "$pilot_access_ids" == "$admin_ids" ]] || {
+            echo "Live pilot requires exactly one owner ID shared by PILOT_ACCESS_TELEGRAM_IDS and ADMIN_TELEGRAM_IDS." >&2
+            exit 1
+        }
+    elif [[ "$live_payments_enabled" != "false" ]]; then
+        echo "Pilot requires LIVE_PAYMENTS_ENABLED=true or false." >&2
+        exit 1
+    fi
+    if [[ -f "$pilot_payment_request" ]]; then
+        request="$(tr -d '\r\n' < "$pilot_payment_request")"
+        pilot_payment_request_action="invalid"
+        if [[ ! "$request" =~ ^(enable|disable):([0-9a-f]{40})$ ]]; then
+            echo "Invalid pilot payment request." >&2
+            exit 1
+        fi
+        pilot_payment_request_action="${BASH_REMATCH[1]}"
+        requested_commit="${BASH_REMATCH[2]}"
+        [[ "$requested_commit" == "$commit" ]] || {
+            echo "Pilot payment request targets a different commit." >&2
+            exit 1
+        }
+        [[ "$pilot_access_ids" =~ ^[1-9][0-9]*$ && "$pilot_access_ids" == "$admin_ids" ]] || {
+            echo "Pilot payment changes require exactly one owner ID shared by the pilot and admin allowlists." >&2
+            exit 1
+        }
+    fi
 else
     echo "Deployment allows only test/fake, private staging/test Robokassa, or private pilot/live Robokassa." >&2
     echo "Public production remains blocked by the release-gate process." >&2
@@ -178,7 +211,22 @@ upsert_env "OPERATOR_EMAIL" "$operator_email" "$next_env"
 sed -i '/^PAYMENT_RETENTION_DAYS=/d' "$next_env"
 upsert_env "PAYMENT_CONTACT_RETENTION_DAYS" "$payment_contact_retention_days" "$next_env"
 upsert_env "PAYMENT_RECORD_RETENTION_YEARS" "$payment_record_retention_years" "$next_env"
+if [[ "$pilot_payment_request_action" == "enable" ]]; then
+    upsert_env "PILOT_LIVE_PAYMENT_REVIEWED" "true" "$next_env"
+    upsert_env "LIVE_PAYMENTS_ENABLED" "true" "$next_env"
+elif [[ "$pilot_payment_request_action" == "disable" ]]; then
+    upsert_env "LIVE_PAYMENTS_ENABLED" "false" "$next_env"
+fi
+if [[ "$app_env" == "pilot" && "$live_payments_enabled" == "true" ]]; then
+    upsert_env "LIVE_PAYMENTS_ENABLED" "false" "$rollback_env"
+fi
 chmod 600 "$next_env"
+chmod 600 "$rollback_env"
+
+docker compose --env-file "$next_env" -f "$next_compose" config >/dev/null
+docker run --rm --network none --read-only --cap-drop ALL \
+    --security-opt no-new-privileges:true --env-file "$next_env" --entrypoint python "$image" -c \
+    'from money_profile_bot.config import Settings; Settings()' >/dev/null
 
 deployment_started=1
 mv -- "$next_compose" compose.yaml
