@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -125,6 +125,32 @@ async def test_home_page_discloses_paused_live_payments() -> None:
     assert response.status == 200
     assert "Оплата временно приостановлена" in body
     assert "Новые счета не создаются" in body
+
+
+@pytest.mark.asyncio
+async def test_health_fails_when_delivery_worker_is_not_running() -> None:
+    settings = Settings(source_commit="abcdef1", _env_file=None)
+    store = AsyncMock()
+    store.healthcheck.return_value = True
+    delivery = Mock(spec=DeliveryWorker)
+    delivery.is_healthy.return_value = False
+    app = create_web_app(
+        settings,
+        cast(Store, store),
+        cast(RobokassaClient, AsyncMock()),
+        cast(DeliveryWorker, delivery),
+    )
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/healthz")
+        body = await response.json()
+
+    assert response.status == 503
+    assert body == {
+        "status": "error",
+        "version": "abcdef1",
+        "checks": {"database": "ok", "delivery": "error"},
+    }
 
 
 @pytest.mark.asyncio

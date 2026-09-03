@@ -173,9 +173,18 @@ def create_web_app(
         return web.Response(text=_home_page(settings), content_type="text/html")
 
     async def health(_: web.Request) -> web.Response:
-        healthy = await store.healthcheck()
+        database_healthy = await store.healthcheck()
+        delivery_healthy = delivery is None or delivery.is_healthy()
+        healthy = database_healthy and delivery_healthy
         return web.json_response(
-            {"status": "ok" if healthy else "error", "version": settings.source_commit},
+            {
+                "status": "ok" if healthy else "error",
+                "version": settings.source_commit,
+                "checks": {
+                    "database": "ok" if database_healthy else "error",
+                    "delivery": "ok" if delivery_healthy else "error",
+                },
+            },
             status=200 if healthy else 503,
         )
 

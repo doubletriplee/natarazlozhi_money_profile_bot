@@ -66,6 +66,7 @@ async def serve() -> None:
     delivery: DeliveryWorker | None = None
     tasks: list[asyncio.Task[object]] = []
     runner: web.AppRunner | None = None
+    delivery_task: asyncio.Task[None] | None = None
 
     async with aiohttp.ClientSession() as http_session:
         robokassa = RobokassaClient(settings, http_session)
@@ -128,15 +129,31 @@ async def serve() -> None:
 
         tasks.append(asyncio.create_task(maintenance(store, settings), name="maintenance-worker"))
         if delivery:
-            tasks.append(asyncio.create_task(delivery.run(), name="delivery-worker"))
+            delivery_task = asyncio.create_task(delivery.run(), name="delivery-worker")
+            tasks.append(delivery_task)
 
         try:
             if bot and dispatcher:
                 await set_commands(bot)
-                await dispatcher.start_polling(
-                    bot,
-                    allowed_updates=dispatcher.resolve_used_update_types(),
+                polling_task = asyncio.create_task(
+                    dispatcher.start_polling(
+                        bot,
+                        allowed_updates=dispatcher.resolve_used_update_types(),
+                    ),
+                    name="telegram-polling",
                 )
+                tasks.append(polling_task)
+                critical_tasks = {polling_task}
+                if delivery_task:
+                    critical_tasks.add(delivery_task)
+                done, _ = await asyncio.wait(
+                    critical_tasks,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if delivery_task and delivery_task in done:
+                    await delivery_task
+                    raise RuntimeError("delivery worker stopped unexpectedly")
+                await polling_task
             else:
                 await asyncio.Event().wait()
         finally:
@@ -145,7 +162,7 @@ async def serve() -> None:
             for task in tasks:
                 task.cancel()
             for task in tasks:
-                with suppress(asyncio.CancelledError):
+                with suppress(asyncio.CancelledError, Exception):
                     await task
             if runner:
                 await runner.cleanup()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 import string
 from collections.abc import Callable
@@ -10,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -36,12 +37,18 @@ from money_profile_bot.models import (
     new_id,
     utcnow,
 )
-from money_profile_bot.services.robokassa import Invoice, RobokassaClient
+from money_profile_bot.services.robokassa import (
+    Invoice,
+    RobokassaClient,
+    RobokassaError,
+    RobokassaTransportError,
+)
 
 FORM_REMINDER_DELAY = timedelta(hours=1)
 STRENGTH_OFFER_DELAY = timedelta(hours=1)
 FULL_READING_DELAY = timedelta(hours=1)
 OFFER_RETRY_DELAY = timedelta(minutes=5)
+logger = logging.getLogger(__name__)
 
 
 def _order_code() -> str:
@@ -371,17 +378,20 @@ class Store:
                 created += 1
         return created
 
-    async def pending_form_reminder_ids(self) -> list[str]:
+    async def pending_form_reminder_ids(self, *, limit: int = 100) -> list[str]:
         async with self.sessions() as session:
             return list(
                 (
                     await session.scalars(
-                        select(FormReminder.id).where(
+                        select(FormReminder.id)
+                        .where(
                             FormReminder.status.in_(
                                 (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
                             ),
                             FormReminder.available_at <= utcnow(),
                         )
+                        .order_by(FormReminder.available_at)
+                        .limit(limit)
                     )
                 ).all()
             )
@@ -475,17 +485,20 @@ class Store:
                 )
             )
 
-    async def pending_strength_offer_profile_ids(self) -> list[str]:
+    async def pending_strength_offer_profile_ids(self, *, limit: int = 100) -> list[str]:
         async with self.sessions() as session:
             return list(
                 (
                     await session.scalars(
-                        select(StrengthOffer.profile_id).where(
+                        select(StrengthOffer.profile_id)
+                        .where(
                             StrengthOffer.status.in_(
                                 (DeliveryStatus.PENDING, DeliveryStatus.FAILED)
                             ),
                             StrengthOffer.available_at <= utcnow(),
                         )
+                        .order_by(StrengthOffer.available_at)
+                        .limit(limit)
                     )
                 ).all()
             )
@@ -860,7 +873,7 @@ class Store:
             )
             return order, telegram_id, birth, result, items
 
-    async def pending_order_ids(self) -> list[str]:
+    async def pending_order_ids(self, *, limit: int = 100) -> list[str]:
         async with self.sessions() as session:
             return list(
                 (
@@ -879,7 +892,13 @@ class Store:
                                 DeliveryItem.available_at <= utcnow(),
                             ),
                         )
-                        .distinct()
+                        .group_by(Order.id)
+                        .order_by(
+                            case((Order.status == OrderStatus.PAID, 0), else_=1),
+                            Order.paid_at,
+                            func.min(DeliveryItem.available_at),
+                        )
+                        .limit(limit)
                     )
                 ).all()
             )
@@ -1009,6 +1028,11 @@ class Store:
                 raise ValueError("order is not refundable")
             if order.provider != "robokassa":
                 raise ValueError("test orders do not have refundable payments")
+            payment = await session.scalar(select(Payment).where(Payment.order_id == order.id))
+            if not payment:
+                raise LookupError("payment journal entry not found")
+            if payment.refund_status:
+                raise ValueError("refund is already in progress or requires review")
             order.refund_confirmation_hash = self.crypto.lookup(
                 f"{order.id}:{token}", context="refund-confirmation"
             )
@@ -1016,7 +1040,8 @@ class Store:
         return token
 
     async def execute_refund(self, order_code: str, token: str) -> str:
-        async with self.sessions() as session:
+        now = utcnow()
+        async with self.sessions() as session, session.begin():
             order = await session.scalar(select(Order).where(Order.code == order_code.upper()))
             if not order:
                 raise LookupError("order not found")
@@ -1025,7 +1050,7 @@ class Store:
                 not order.refund_confirmation_hash
                 or not secrets.compare_digest(expected, order.refund_confirmation_hash)
                 or not order.refund_confirmation_expires_at
-                or _utc(order.refund_confirmation_expires_at) < utcnow()
+                or _utc(order.refund_confirmation_expires_at) < now
             ):
                 raise ValueError("refund confirmation is invalid or expired")
             if order.status not in (OrderStatus.PAID, OrderStatus.DELIVERED):
@@ -1035,23 +1060,46 @@ class Store:
             payment = await session.scalar(select(Payment).where(Payment.order_id == order.id))
             if not payment:
                 raise LookupError("payment journal entry not found")
+            if payment.refund_status:
+                raise ValueError("refund is already in progress or requires review")
             invoice_id = order.provider_invoice_id
             amount_minor = order.amount_minor
             order_id = order.id
+            payment_id = payment.id
+            claimed_order_id = await session.scalar(
+                update(Order)
+                .where(
+                    Order.id == order_id,
+                    Order.status.in_((OrderStatus.PAID, OrderStatus.DELIVERED)),
+                    Order.refund_confirmation_hash == expected,
+                    Order.refund_confirmation_expires_at.is_not(None),
+                    Order.refund_confirmation_expires_at >= now,
+                )
+                .values(
+                    refund_confirmation_hash=None,
+                    refund_confirmation_expires_at=None,
+                )
+                .returning(Order.id)
+                .execution_options(synchronize_session=False)
+            )
+            if claimed_order_id is None:
+                raise ValueError("refund confirmation was already used")
+            payment.refund_status = "verifying"
 
-        state = await self.robokassa.operation_state(invoice_id)
+        try:
+            state = await self.robokassa.operation_state(invoice_id)
+        except RobokassaError:
+            await self._change_refund_status(payment_id, expected="verifying", value=None)
+            raise
         if state.state_code != 100 or state.amount_minor != amount_minor:
+            await self._change_refund_status(payment_id, expected="verifying", value="rejected")
             raise ValueError("Robokassa operation is not a matching successful payment")
-        request_id = await self.robokassa.refund(
-            operation_key=state.operation_key,
-            amount_minor=amount_minor,
-            order_code=order_code.upper(),
-        )
         async with self.sessions() as session, session.begin():
-            order = await session.get(Order, order_id)
-            payment = await session.scalar(select(Payment).where(Payment.order_id == order_id))
-            if not order or not payment:
+            payment = await session.get(Payment, payment_id)
+            if not payment:
                 raise RuntimeError("refund state disappeared")
+            if payment.refund_status != "verifying":
+                raise RuntimeError("refund state changed unexpectedly")
             payment.provider_operation_hash = self.crypto.lookup(
                 state.operation_key, context="robokassa-operation"
             )
@@ -1059,11 +1107,50 @@ class Store:
                 state.operation_key, context=f"payment.operation:{payment.id}"
             )
             payment.provider_payment_method = state.payment_method
+            payment.refund_status = "requesting"
+
+        try:
+            request_id = await self.robokassa.refund(
+                operation_key=state.operation_key,
+                amount_minor=amount_minor,
+                order_code=order_code.upper(),
+            )
+        except RobokassaTransportError as exc:
+            await self._change_refund_status(
+                payment_id,
+                expected="requesting",
+                value="uncertain",
+            )
+            raise RobokassaError(
+                "refund request outcome is uncertain; check Robokassa before retry"
+            ) from exc
+        except RobokassaError:
+            await self._change_refund_status(payment_id, expected="requesting", value=None)
+            raise
+
+        async with self.sessions() as session, session.begin():
+            payment = await session.get(Payment, payment_id)
+            if not payment:
+                raise RuntimeError("refund state disappeared")
+            if payment.refund_status != "requesting":
+                raise RuntimeError("refund state changed unexpectedly")
             payment.refund_request_id = request_id
             payment.refund_status = "processing"
-            order.refund_confirmation_hash = None
-            order.refund_confirmation_expires_at = None
         return request_id
+
+    async def _change_refund_status(
+        self,
+        payment_id: str,
+        *,
+        expected: str,
+        value: str | None,
+    ) -> None:
+        async with self.sessions() as session, session.begin():
+            await session.execute(
+                update(Payment)
+                .where(Payment.id == payment_id, Payment.refund_status == expected)
+                .values(refund_status=value)
+            )
 
     async def refresh_refunds(self) -> int:
         async with self.sessions() as session:
@@ -1082,7 +1169,14 @@ class Store:
         for payment_id, order_id, request_id in identifiers:
             if not request_id:
                 continue
-            status = await self.robokassa.refund_state(request_id)
+            try:
+                status = await self.robokassa.refund_state(request_id)
+            except RobokassaError as exc:
+                logger.warning(
+                    "refund status refresh failed",
+                    extra={"error": type(exc).__name__},
+                )
+                continue
             async with self.sessions() as session, session.begin():
                 payment = await session.get(Payment, payment_id)
                 order = await session.get(Order, order_id)

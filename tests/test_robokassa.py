@@ -11,7 +11,39 @@ import pytest
 from aiohttp import ClientSession
 
 from money_profile_bot.config import Settings
-from money_profile_bot.services.robokassa import RobokassaClient
+from money_profile_bot.services.robokassa import (
+    RobokassaClient,
+    RobokassaError,
+    RobokassaTransportError,
+)
+
+
+class FakeResponse:
+    def __init__(self, status: int, body: str) -> None:
+        self.status = status
+        self.body = body
+
+    async def text(self) -> str:
+        return self.body
+
+
+class FakeRequest:
+    def __init__(self, response: FakeResponse) -> None:
+        self.response = response
+
+    async def __aenter__(self) -> FakeResponse:
+        return self.response
+
+    async def __aexit__(self, *_: object) -> None:
+        return None
+
+
+class FakeSession:
+    def __init__(self, response: FakeResponse) -> None:
+        self.response = response
+
+    def post(self, *_: object, **__: object) -> FakeRequest:
+        return FakeRequest(self.response)
 
 
 def settings() -> Settings:
@@ -30,6 +62,13 @@ def settings() -> Settings:
 
 def client() -> RobokassaClient:
     return RobokassaClient(settings(), cast(ClientSession, None))
+
+
+def response_client(status: int, body: str) -> RobokassaClient:
+    return RobokassaClient(
+        settings(),
+        cast(ClientSession, FakeSession(FakeResponse(status, body))),
+    )
 
 
 def test_result_signature_is_accepted_case_insensitively() -> None:
@@ -57,6 +96,31 @@ def test_refund_jwt_uses_password3_directly() -> None:
     header, payload, signature = value.split(".")
     expected = hmac.new(b"pass3", f"{header}.{payload}".encode(), hashlib.sha256).digest()
     assert base64.urlsafe_b64encode(expected).rstrip(b"=").decode() == signature
+
+
+@pytest.mark.asyncio
+async def test_post_jwt_treats_explicit_client_rejection_as_retryable() -> None:
+    robokassa = response_client(400, "{}")
+
+    with pytest.raises(RobokassaError) as captured:
+        await robokassa._post_jwt("https://example.test", {}, "pass3", refund=True)
+
+    assert not isinstance(captured.value, RobokassaTransportError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [(500, "{}"), (200, "not-json")],
+)
+async def test_post_jwt_marks_ambiguous_provider_response_as_uncertain(
+    status: int,
+    body: str,
+) -> None:
+    robokassa = response_client(status, body)
+
+    with pytest.raises(RobokassaTransportError):
+        await robokassa._post_jwt("https://example.test", {}, "pass3", refund=True)
 
 
 @pytest.mark.asyncio
@@ -120,3 +184,18 @@ async def test_refund_uses_money_avatar_name(monkeypatch: pytest.MonkeyPatch) ->
 
     payload = post_jwt.await_args.args[1]
     assert payload["InvoiceItems"][0]["Name"] == "Денежный аватар, заказ ORDER-42"
+
+
+@pytest.mark.asyncio
+async def test_refund_requires_request_id_in_success_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    robokassa = client()
+    monkeypatch.setattr(robokassa, "_post_jwt", AsyncMock(return_value={"success": True}))
+
+    with pytest.raises(RobokassaTransportError, match="request ID"):
+        await robokassa.refund(
+            operation_key="operation-key",
+            amount_minor=14900,
+            order_code="ORDER-42",
+        )

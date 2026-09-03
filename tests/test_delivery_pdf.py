@@ -1,7 +1,8 @@
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -184,3 +185,58 @@ async def test_legacy_feedback_item_is_completed_without_user_message() -> None:
 
     bot.send_photo.assert_not_awaited()
     store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT)
+
+
+@pytest.mark.asyncio
+async def test_delivery_cycle_prioritizes_paid_orders_and_bounds_background_work() -> None:
+    _, store, worker = _worker_context("avatar_result")
+    store.pending_order_ids.return_value = ["order-1"]
+    store.pending_form_reminder_ids.return_value = ["reminder-1"]
+    store.pending_strength_offer_profile_ids.return_value = ["profile-1"]
+    worker.deliver = AsyncMock()
+    worker.deliver_form_reminder = AsyncMock()
+    worker.deliver_strength_offer = AsyncMock()
+
+    await worker._deliver_pending_cycle()
+
+    assert store.mock_calls[:3] == [
+        call.pending_order_ids(limit=50),
+        call.pending_form_reminder_ids(limit=10),
+        call.pending_strength_offer_profile_ids(limit=10),
+    ]
+    worker.deliver.assert_awaited_once_with("order-1")
+    worker.deliver_form_reminder.assert_awaited_once_with("reminder-1")
+    worker.deliver_strength_offer.assert_awaited_once_with("profile-1")
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_reports_health_only_while_running() -> None:
+    _, store, worker = _worker_context("avatar_result")
+    store.pending_order_ids.return_value = []
+    store.pending_form_reminder_ids.return_value = []
+    store.pending_strength_offer_profile_ids.return_value = []
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.sleep(0)
+
+    assert worker.is_healthy()
+    worker.stop()
+    await task
+    assert not worker.is_healthy()
+
+
+@pytest.mark.asyncio
+async def test_delivery_worker_stops_after_repeated_cycle_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, store, worker = _worker_context("avatar_result")
+    store.pending_order_ids.side_effect = RuntimeError("database unavailable")
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await worker.run()
+
+    assert store.pending_order_ids.await_count == 3
+    assert sleep.await_count == 2
+    assert not worker.is_healthy()

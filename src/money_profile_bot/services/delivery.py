@@ -4,6 +4,7 @@ import asyncio
 import logging
 from contextlib import suppress
 from decimal import Decimal
+from time import monotonic
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -23,6 +24,10 @@ from money_profile_bot.services.store import Store
 logger = logging.getLogger(__name__)
 
 FULL_READING_TRIGGER_TEXT = "Узнать всю денежную картину"
+DELIVERY_ORDER_BATCH_SIZE = 50
+DELIVERY_BACKGROUND_BATCH_SIZE = 10
+DELIVERY_MAX_CONSECUTIVE_FAILURES = 3
+DELIVERY_HEALTH_TIMEOUT_SECONDS = 30.0
 
 
 class DeliveryWorker:
@@ -47,21 +52,64 @@ class DeliveryWorker:
         self._wake = asyncio.Event()
         self._delivery_lock = asyncio.Lock()
         self._stopping = False
+        self._running = False
+        self._heartbeat_at = 0.0
+        self._consecutive_cycle_failures = 0
 
     def notify(self) -> None:
         self._wake.set()
 
     async def run(self) -> None:
-        while not self._stopping:
-            for reminder_id in await self.store.pending_form_reminder_ids():
-                await self.deliver_form_reminder(reminder_id)
-            for profile_id in await self.store.pending_strength_offer_profile_ids():
-                await self.deliver_strength_offer(profile_id)
-            for order_id in await self.store.pending_order_ids():
-                await self.deliver(order_id)
-            self._wake.clear()
-            with suppress(TimeoutError):
-                await asyncio.wait_for(self._wake.wait(), timeout=10)
+        self._running = True
+        try:
+            while not self._stopping:
+                self._wake.clear()
+                self._heartbeat()
+                try:
+                    await self._deliver_pending_cycle()
+                except Exception:
+                    self._consecutive_cycle_failures += 1
+                    logger.exception(
+                        "delivery worker cycle failed",
+                        extra={"failures": self._consecutive_cycle_failures},
+                    )
+                    if self._consecutive_cycle_failures >= DELIVERY_MAX_CONSECUTIVE_FAILURES:
+                        raise
+                    await asyncio.sleep(1)
+                    continue
+                self._consecutive_cycle_failures = 0
+                self._heartbeat()
+                if self._wake.is_set():
+                    continue
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(self._wake.wait(), timeout=10)
+        finally:
+            self._running = False
+
+    async def _deliver_pending_cycle(self) -> None:
+        for order_id in await self.store.pending_order_ids(limit=DELIVERY_ORDER_BATCH_SIZE):
+            self._heartbeat()
+            await self.deliver(order_id)
+        for reminder_id in await self.store.pending_form_reminder_ids(
+            limit=DELIVERY_BACKGROUND_BATCH_SIZE
+        ):
+            self._heartbeat()
+            await self.deliver_form_reminder(reminder_id)
+        for profile_id in await self.store.pending_strength_offer_profile_ids(
+            limit=DELIVERY_BACKGROUND_BATCH_SIZE
+        ):
+            self._heartbeat()
+            await self.deliver_strength_offer(profile_id)
+
+    def _heartbeat(self) -> None:
+        self._heartbeat_at = monotonic()
+
+    def is_healthy(self) -> bool:
+        return (
+            self._running
+            and self._consecutive_cycle_failures == 0
+            and monotonic() - self._heartbeat_at <= DELIVERY_HEALTH_TIMEOUT_SECONDS
+        )
 
     def stop(self) -> None:
         self._stopping = True

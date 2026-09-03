@@ -23,6 +23,10 @@ class RobokassaError(RuntimeError):
     pass
 
 
+class RobokassaTransportError(RobokassaError):
+    """The provider may have received a request, but its outcome is unknown locally."""
+
+
 @dataclass(frozen=True, slots=True)
 class Invoice:
     invoice_uuid: str
@@ -97,11 +101,20 @@ class RobokassaClient:
             async with self.session.post(
                 endpoint, json=token, timeout=aiohttp.ClientTimeout(total=20)
             ) as response:
-                data = await response.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
-            raise RobokassaError("Robokassa request failed") from exc
-        if response.status >= 400:
-            raise RobokassaError(f"Robokassa HTTP status {response.status}")
+                status = response.status
+                body = await response.text()
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise RobokassaTransportError("Robokassa request failed") from exc
+        if 400 <= status < 500:
+            raise RobokassaError(f"Robokassa HTTP status {status}")
+        if status >= 500:
+            raise RobokassaTransportError(f"Robokassa HTTP status {status}")
+        try:
+            data = json.loads(body)
+        except (TypeError, ValueError) as exc:
+            raise RobokassaTransportError("Robokassa returned an invalid response") from exc
+        if not isinstance(data, dict):
+            raise RobokassaTransportError("Robokassa returned an invalid response")
         return cast(dict[str, Any], data)
 
     async def create_invoice(
@@ -212,17 +225,30 @@ class RobokassaClient:
             ) as response:
                 body = await response.text()
         except (aiohttp.ClientError, TimeoutError) as exc:
-            raise RobokassaError("cannot query operation state") from exc
-        root = ET.fromstring(body)
-        namespace = {"r": "http://merchant.roboxchange.com/WebService/"}
-        code = int(root.findtext("r:Result/r:Code", default="1000", namespaces=namespace))
+            raise RobokassaTransportError("cannot query operation state") from exc
+        if response.status >= 400:
+            raise RobokassaTransportError(f"operation state returned HTTP status {response.status}")
+        try:
+            root = ET.fromstring(body)
+            namespace = {"r": "http://merchant.roboxchange.com/WebService/"}
+            code = int(root.findtext("r:Result/r:Code", default="1000", namespaces=namespace))
+        except (ET.ParseError, ValueError) as exc:
+            raise RobokassaTransportError("invalid operation state response") from exc
         if code != 0:
             raise RobokassaError(f"OpStateExt returned code {code}")
-        state_code = int(root.findtext("r:State/r:Code", default="0", namespaces=namespace))
-        operation_key = root.findtext("r:Info/r:OpKey", default="", namespaces=namespace)
-        out_sum = root.findtext("r:Info/r:OutSum", default="0", namespaces=namespace)
-        method = root.findtext("r:Info/r:PaymentMethod/r:Code", default="", namespaces=namespace)
-        return OperationState(state_code, operation_key, _minor(out_sum), method)
+        try:
+            state_code = int(root.findtext("r:State/r:Code", default="0", namespaces=namespace))
+            operation_key = root.findtext("r:Info/r:OpKey", default="", namespaces=namespace)
+            out_sum = root.findtext("r:Info/r:OutSum", default="0", namespaces=namespace)
+            method = root.findtext(
+                "r:Info/r:PaymentMethod/r:Code", default="", namespaces=namespace
+            )
+            amount_minor = _minor(out_sum)
+        except (ArithmeticError, ValueError) as exc:
+            raise RobokassaTransportError("invalid operation state response") from exc
+        if state_code == 100 and not operation_key:
+            raise RobokassaTransportError("operation state did not include an operation key")
+        return OperationState(state_code, operation_key, amount_minor, method)
 
     async def refund(self, *, operation_key: str, amount_minor: int, order_code: str) -> str:
         if not self.settings.robokassa_password3:
@@ -250,7 +276,10 @@ class RobokassaClient:
         )
         if not data.get("success"):
             raise RobokassaError(str(data.get("message") or "refund was rejected"))
-        return str(data["requestId"])
+        request_id = data.get("requestId")
+        if not request_id:
+            raise RobokassaTransportError("refund response did not include a request ID")
+        return str(request_id)
 
     async def refund_state(self, request_id: str) -> str:
         try:
@@ -261,7 +290,11 @@ class RobokassaClient:
             ) as response:
                 data = await response.json(content_type=None)
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
-            raise RobokassaError("cannot query refund state") from exc
+            raise RobokassaTransportError("cannot query refund state") from exc
+        if not isinstance(data, dict):
+            raise RobokassaTransportError("invalid refund state response")
+        if response.status >= 500:
+            raise RobokassaTransportError(f"refund state returned HTTP status {response.status}")
         if response.status >= 400 or "label" not in data:
             raise RobokassaError(str(data.get("message") or "invalid refund state response"))
         return str(data["label"])
