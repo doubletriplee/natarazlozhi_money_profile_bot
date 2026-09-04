@@ -212,3 +212,47 @@ def test_pilot_requires_live_robokassa_and_private_access() -> None:
         Settings(**(required | {"robokassa_password3": ""}))
     with pytest.raises(ValidationError, match="PAYMENT_PLATFORM_RISK_ACKNOWLEDGED"):
         Settings(**(required | {"payment_platform_risk_acknowledged": False}))
+
+
+def test_production_requires_golden_cards_and_separate_live_payment_review() -> None:
+    required = {
+        "app_env": Environment.PRODUCTION,
+        "bot_token": "123:test",
+        "admin_telegram_ids": "10001",
+        "bootstrap_admin_on_first_start": False,
+        "source_commit": "abcdef1",
+        "payment_mode": PaymentMode.ROBOKASSA,
+        "robokassa_merchant_login": "demo",
+        "robokassa_password1": "live-pass-1",
+        "robokassa_password2": "live-pass-2",
+        "robokassa_password3": "live-pass-3",
+        "robokassa_test_mode": False,
+        "payment_platform_risk_acknowledged": True,
+        "methodology_approved": True,
+        "golden_cards_approved": True,
+        "app_encryption_key": key(),
+        "lookup_hmac_key": key(),
+        "backup_encryption_key": key(),
+        "_env_file": None,
+    }
+
+    paused = Settings(**required)
+    assert paused.app_env is Environment.PRODUCTION
+    assert not paused.robokassa_invoice_creation_enabled
+
+    with pytest.raises(ValidationError, match="PRODUCTION_LIVE_PAYMENT_REVIEWED=true"):
+        Settings(**(required | {"live_payments_enabled": True}))
+
+    live = Settings(
+        **(
+            required
+            | {
+                "live_payments_enabled": True,
+                "production_live_payment_reviewed": True,
+            }
+        )
+    )
+    assert live.robokassa_invoice_creation_enabled
+
+    with pytest.raises(ValidationError, match="GOLDEN_CARDS_APPROVED"):
+        Settings(**(required | {"golden_cards_approved": False}))

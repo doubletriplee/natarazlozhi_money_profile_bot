@@ -7,7 +7,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from aiohttp import web
 
 from money_profile_bot.backup_status import backup_status_is_healthy
-from money_profile_bot.config import PaymentMode, Settings
+from money_profile_bot.config import Environment, PaymentMode, Settings
 from money_profile_bot.services.delivery import DeliveryWorker
 from money_profile_bot.services.robokassa import RobokassaClient
 from money_profile_bot.services.store import Store
@@ -61,9 +61,14 @@ def _home_page(settings: Settings) -> str:
 Списание денег и покупка не происходят. Актуальный сценарий доступен в Telegram-боте.
 </aside>"""
     elif not settings.live_payments_enabled:
-        test_notice = """<aside class="test-notice" aria-label="Оплата приостановлена">
+        availability = (
+            "Бот уже доступен всем, но новые счета пока не создаются."
+            if settings.app_env is Environment.PRODUCTION
+            else "Новые счета не создаются. Закрытый пилот доступен только приглашённым участникам."
+        )
+        test_notice = f"""<aside class="test-notice" aria-label="Оплата приостановлена">
 <strong>Оплата временно приостановлена.</strong>
-Новые счета не создаются. Закрытый пилот доступен только приглашённым участникам.
+{availability}
 </aside>"""
 
     operator = performer_body(settings)

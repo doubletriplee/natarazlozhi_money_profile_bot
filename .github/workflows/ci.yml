@@ -25,6 +25,25 @@ jobs:
       - run: ruff format --check .
       - run: mypy src
       - run: pytest
+      - run: bash -n scripts/deploy_remote.sh
+      - name: Check PowerShell script syntax
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            [Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$parseErrors
+            ) | Out-Null
+            if ($parseErrors.Count -gt 0) {
+              $parseErrors | ForEach-Object { Write-Error "${_}" }
+              $failed = $true
+            }
+          }
+          if ($failed) { throw "PowerShell syntax validation failed." }
       - run: docker build deploy/telegram-proxy
 
   image:

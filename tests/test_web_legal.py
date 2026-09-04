@@ -128,6 +128,45 @@ async def test_home_page_discloses_paused_live_payments() -> None:
 
 
 @pytest.mark.asyncio
+async def test_production_home_page_discloses_public_access_with_payments_paused() -> None:
+    settings = Settings(
+        app_env=Environment.PRODUCTION,
+        bot_token="123:test",
+        admin_telegram_ids="10001",
+        source_commit="abcdef1",
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_merchant_login="demo",
+        robokassa_password1="live-pass-1",
+        robokassa_password2="live-pass-2",
+        robokassa_password3="live-pass-3",
+        robokassa_test_mode=False,
+        live_payments_enabled=False,
+        payment_platform_risk_acknowledged=True,
+        methodology_approved=True,
+        golden_cards_approved=True,
+        app_encryption_key="test-key",
+        lookup_hmac_key="test-key",
+        backup_encryption_key="test-key",
+        _env_file=None,
+    )
+    app = create_web_app(
+        settings,
+        cast(Store, AsyncMock()),
+        cast(RobokassaClient, AsyncMock()),
+        None,
+    )
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/")
+        body = await response.text()
+
+    assert response.status == 200
+    assert "Оплата временно приостановлена" in body
+    assert "Бот уже доступен всем" in body
+    assert "Закрытый пилот" not in body
+
+
+@pytest.mark.asyncio
 async def test_health_fails_when_delivery_worker_is_not_running() -> None:
     settings = Settings(source_commit="abcdef1", _env_file=None)
     store = AsyncMock()

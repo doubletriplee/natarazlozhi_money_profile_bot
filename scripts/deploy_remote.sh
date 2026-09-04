@@ -51,6 +51,10 @@ next_env="$deploy_directory/.env.next-$commit"
 next_compose="$deploy_directory/compose.yaml.next-$commit"
 pilot_payment_request="$deploy_directory/.pilot-payment-request"
 pilot_payment_request_action=""
+production_transition_request="$deploy_directory/.production-transition-request"
+production_transition_request_action=""
+production_payment_request="$deploy_directory/.production-payment-request"
+production_payment_request_action=""
 deployment_started=0
 
 restore_previous_release() {
@@ -71,6 +75,12 @@ cleanup() {
     rm -f -- "$rollback_env" "$rollback_compose" "$next_env" "$next_compose" "$staged_compose"
     if [[ -n "$pilot_payment_request_action" ]]; then
         rm -f -- "$pilot_payment_request"
+    fi
+    if [[ -n "$production_transition_request_action" ]]; then
+        rm -f -- "$production_transition_request"
+    fi
+    if [[ -n "$production_payment_request_action" ]]; then
+        rm -f -- "$production_payment_request"
     fi
     if [[ "$0" == /tmp/money-profile-deploy-*/deploy_remote.sh ]]; then
         rm -f -- "$0"
@@ -94,13 +104,24 @@ cd "$deploy_directory"
 [[ -f .env ]] || { echo "Missing $deploy_directory/.env" >&2; exit 1; }
 [[ -f compose.yaml ]] || { echo "Missing $deploy_directory/compose.yaml" >&2; exit 1; }
 [[ -s "$staged_compose" ]] || { echo "Missing staged Compose file" >&2; exit 1; }
+command -v flock >/dev/null || { echo "The server requires flock for serialized deployments." >&2; exit 1; }
+exec 9>"$deploy_directory/.deploy.lock"
+chmod 600 "$deploy_directory/.deploy.lock"
+flock -n 9 || { echo "Another deployment is already running." >&2; exit 1; }
 
 app_env="$(sed -n 's/^APP_ENV=//p' .env | tail -n 1)"
 payment_mode="$(sed -n 's/^PAYMENT_MODE=//p' .env | tail -n 1)"
 robokassa_test_mode="$(sed -n 's/^ROBOKASSA_TEST_MODE=//p' .env | tail -n 1)"
 if [[ "$app_env" == "test" && "$payment_mode" == "fake" ]]; then
-    :
+    if [[ -f "$pilot_payment_request" || -f "$production_transition_request" || -f "$production_payment_request" ]]; then
+        echo "Release-state requests are not valid in the public test environment." >&2
+        exit 1
+    fi
 elif [[ "$app_env" == "staging" && "$payment_mode" == "robokassa" && "$robokassa_test_mode" == "true" ]]; then
+    if [[ -f "$pilot_payment_request" || -f "$production_transition_request" || -f "$production_payment_request" ]]; then
+        echo "Release-state requests are not valid in staging." >&2
+        exit 1
+    fi
     test_access_ids="$(sed -n 's/^TEST_ACCESS_TELEGRAM_IDS=//p' .env | tail -n 1)"
     test_password1="$(sed -n 's/^ROBOKASSA_TEST_PASSWORD1=//p' .env | tail -n 1)"
     test_password2="$(sed -n 's/^ROBOKASSA_TEST_PASSWORD2=//p' .env | tail -n 1)"
@@ -137,6 +158,14 @@ elif [[ "$app_env" == "pilot" && "$payment_mode" == "robokassa" && "$robokassa_t
         echo "Pilot requires LIVE_PAYMENTS_ENABLED=true or false." >&2
         exit 1
     fi
+    if [[ -f "$production_payment_request" ]]; then
+        echo "Production payment requests require APP_ENV=production." >&2
+        exit 1
+    fi
+    if [[ -f "$pilot_payment_request" && -f "$production_transition_request" ]]; then
+        echo "Pilot payment and production transition requests cannot be applied together." >&2
+        exit 1
+    fi
     if [[ -f "$pilot_payment_request" ]]; then
         request="$(tr -d '\r\n' < "$pilot_payment_request")"
         pilot_payment_request_action="invalid"
@@ -155,9 +184,74 @@ elif [[ "$app_env" == "pilot" && "$payment_mode" == "robokassa" && "$robokassa_t
             exit 1
         }
     fi
+    if [[ -f "$production_transition_request" ]]; then
+        request="$(tr -d '\r\n' < "$production_transition_request")"
+        production_transition_request_action="invalid"
+        if [[ ! "$request" =~ ^prepare:([0-9a-f]{40})$ ]]; then
+            echo "Invalid production transition request." >&2
+            exit 1
+        fi
+        requested_commit="${BASH_REMATCH[1]}"
+        [[ "$requested_commit" == "$commit" ]] || {
+            echo "Production transition request targets a different commit." >&2
+            exit 1
+        }
+        [[ "$live_payments_enabled" == "false" ]] || {
+            echo "Production transition requires LIVE_PAYMENTS_ENABLED=false." >&2
+            exit 1
+        }
+        production_transition_request_action="prepare"
+    fi
+elif [[ "$app_env" == "production" && "$payment_mode" == "robokassa" && "$robokassa_test_mode" == "false" ]]; then
+    admin_ids="$(sed -n 's/^ADMIN_TELEGRAM_IDS=//p' .env | tail -n 1)"
+    password1="$(sed -n 's/^ROBOKASSA_PASSWORD1=//p' .env | tail -n 1)"
+    password2="$(sed -n 's/^ROBOKASSA_PASSWORD2=//p' .env | tail -n 1)"
+    password3="$(sed -n 's/^ROBOKASSA_PASSWORD3=//p' .env | tail -n 1)"
+    live_payments_enabled="$(sed -n 's/^LIVE_PAYMENTS_ENABLED=//p' .env | tail -n 1)"
+    production_live_payment_reviewed="$(sed -n 's/^PRODUCTION_LIVE_PAYMENT_REVIEWED=//p' .env | tail -n 1)"
+    platform_risk_acknowledged="$(sed -n 's/^PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=//p' .env | tail -n 1)"
+    golden_cards_approved="$(sed -n 's/^GOLDEN_CARDS_APPROVED=//p' .env | tail -n 1)"
+    [[ -n "$admin_ids" ]] || { echo "Production requires ADMIN_TELEGRAM_IDS." >&2; exit 1; }
+    [[ -n "$password1" ]] || { echo "Production requires ROBOKASSA_PASSWORD1." >&2; exit 1; }
+    [[ -n "$password2" ]] || { echo "Production requires ROBOKASSA_PASSWORD2." >&2; exit 1; }
+    [[ -n "$password3" ]] || { echo "Production requires ROBOKASSA_PASSWORD3." >&2; exit 1; }
+    [[ "$platform_risk_acknowledged" == "true" ]] || {
+        echo "Production requires PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=true." >&2
+        exit 1
+    }
+    [[ "$golden_cards_approved" == "true" ]] || {
+        echo "Production requires GOLDEN_CARDS_APPROVED=true." >&2
+        exit 1
+    }
+    if [[ "$live_payments_enabled" == "true" ]]; then
+        [[ "$production_live_payment_reviewed" == "true" ]] || {
+            echo "Live production requires PRODUCTION_LIVE_PAYMENT_REVIEWED=true." >&2
+            exit 1
+        }
+    elif [[ "$live_payments_enabled" != "false" ]]; then
+        echo "Production requires LIVE_PAYMENTS_ENABLED=true or false." >&2
+        exit 1
+    fi
+    if [[ -f "$pilot_payment_request" || -f "$production_transition_request" ]]; then
+        echo "Pilot or transition requests are not valid in production." >&2
+        exit 1
+    fi
+    if [[ -f "$production_payment_request" ]]; then
+        request="$(tr -d '\r\n' < "$production_payment_request")"
+        production_payment_request_action="invalid"
+        if [[ ! "$request" =~ ^(enable|disable):([0-9a-f]{40})$ ]]; then
+            echo "Invalid production payment request." >&2
+            exit 1
+        fi
+        production_payment_request_action="${BASH_REMATCH[1]}"
+        requested_commit="${BASH_REMATCH[2]}"
+        [[ "$requested_commit" == "$commit" ]] || {
+            echo "Production payment request targets a different commit." >&2
+            exit 1
+        }
+    fi
 else
-    echo "Deployment allows only test/fake, private staging/test Robokassa, or private pilot/live Robokassa." >&2
-    echo "Public production remains blocked by the release-gate process." >&2
+    echo "Deployment allows only test/fake, private staging/test Robokassa, private pilot/live Robokassa, or guarded production." >&2
     exit 1
 fi
 
@@ -217,7 +311,28 @@ if [[ "$pilot_payment_request_action" == "enable" ]]; then
 elif [[ "$pilot_payment_request_action" == "disable" ]]; then
     upsert_env "LIVE_PAYMENTS_ENABLED" "false" "$next_env"
 fi
-if [[ "$app_env" == "pilot" && "$live_payments_enabled" == "true" ]]; then
+if [[ "$production_transition_request_action" == "prepare" ]]; then
+    upsert_env "APP_ENV" "production" "$next_env"
+    upsert_env "PILOT_ACCESS_TELEGRAM_IDS" "" "$next_env"
+    upsert_env "GOLDEN_CARDS_APPROVED" "true" "$next_env"
+    upsert_env "PILOT_LIVE_PAYMENT_REVIEWED" "false" "$next_env"
+    upsert_env "PRODUCTION_LIVE_PAYMENT_REVIEWED" "false" "$next_env"
+    upsert_env "LIVE_PAYMENTS_ENABLED" "false" "$next_env"
+fi
+if [[ "$production_payment_request_action" == "enable" ]]; then
+    upsert_env "PRODUCTION_LIVE_PAYMENT_REVIEWED" "true" "$next_env"
+    upsert_env "LIVE_PAYMENTS_ENABLED" "true" "$next_env"
+elif [[ "$production_payment_request_action" == "disable" ]]; then
+    upsert_env "PRODUCTION_LIVE_PAYMENT_REVIEWED" "false" "$next_env"
+    upsert_env "LIVE_PAYMENTS_ENABLED" "false" "$next_env"
+fi
+if [[
+    ( "$app_env" == "pilot" || "$app_env" == "production" ) &&
+    "$live_payments_enabled" == "true"
+]] || [[
+    "$pilot_payment_request_action" == "enable" ||
+    "$production_payment_request_action" == "enable"
+]]; then
     upsert_env "LIVE_PAYMENTS_ENABLED" "false" "$rollback_env"
 fi
 chmod 600 "$next_env"
