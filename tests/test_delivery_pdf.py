@@ -6,16 +6,17 @@ from unittest.mock import AsyncMock, call
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from aiogram.types import Message
 
 from money_profile_bot.config import PaymentMode
-from money_profile_bot.models import DeliveryStatus
+from money_profile_bot.models import DeliveryStatus, OrderStatus
 from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
     SALES_MESSAGE_TEXT,
     STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     avatar_paid_caption,
-    avatar_paid_caption_parts,
+    avatar_paid_caption_pages,
     strength_offer_caption,
 )
 from money_profile_bot.services.delivery import (
@@ -33,7 +34,7 @@ def _worker_context(kind: str) -> tuple[AsyncMock, AsyncMock, DeliveryWorker]:
     bot.send_message.return_value = SimpleNamespace(message_id=43)
     store = AsyncMock()
     store.delivery_context.return_value = (
-        SimpleNamespace(id="order-1", profile_id="profile-1"),
+        SimpleNamespace(id="order-1", profile_id="profile-1", status=OrderStatus.PAID),
         123456,
         SimpleNamespace(name="Наталья"),
         SimpleNamespace(money_type="Навигатор"),
@@ -62,28 +63,24 @@ def _robokassa_worker(*, test_mode: bool) -> DeliveryWorker:
 
 
 @pytest.mark.asyncio
-async def test_paid_avatar_is_sent_as_photo_with_complete_text() -> None:
+async def test_paid_avatar_starts_with_first_short_page() -> None:
     bot, store, worker = _worker_context("avatar_result")
 
     await worker.deliver("order-1")
 
     kwargs = bot.send_photo.await_args.kwargs
-    assert kwargs["caption"] == avatar_paid_caption("Навигатор")
-    assert "<b>Онлайн:</b>" in kwargs["caption"]
-    assert "<b>Офлайн:</b>" in kwargs["caption"]
+    pages = avatar_paid_caption_pages("Навигатор")
+    assert kwargs["caption"] == f"<b>Часть 1 из {len(pages)}</b>\n\n{pages[0]}"
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == FULL_READING_TRIGGER_TEXT
-    assert button.callback_data == "full:order-1"
-    new_profile_button = kwargs["reply_markup"].inline_keyboard[1][0]
-    assert new_profile_button.text == NEW_PROFILE_TRIGGER_TEXT
-    assert new_profile_button.callback_data == "profile:new"
+    assert button.text == f"Дальше · 2 из {len(pages)} →"
+    assert button.callback_data == "avatar_page:order-1:1"
     bot.send_message.assert_not_awaited()
     store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=42)
     store.complete_delivery_if_ready.assert_awaited_once_with("order-1")
 
 
 @pytest.mark.asyncio
-async def test_long_paid_avatar_is_continued_without_truncating_approved_copy() -> None:
+async def test_long_paid_avatar_is_split_into_short_semantic_pages() -> None:
     bot, store, worker = _worker_context("avatar_result")
     context = list(store.delivery_context.return_value)
     context[3] = SimpleNamespace(money_type="Муза")
@@ -91,19 +88,81 @@ async def test_long_paid_avatar_is_continued_without_truncating_approved_copy() 
 
     await worker.deliver("order-1")
 
-    parts = avatar_paid_caption_parts("Муза")
-    assert len(parts) == 2
-    assert "\n\n".join(parts) == avatar_paid_caption("Муза")
-    assert bot.send_photo.await_args.kwargs["caption"] == parts[0]
-    assert bot.send_photo.await_args.kwargs["reply_markup"] is None
-    assert bot.send_message.await_args.args == (123456, parts[1])
-    button = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == FULL_READING_TRIGGER_TEXT
-    assert (
-        bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[1][0].callback_data
-        == "profile:new"
+    pages = avatar_paid_caption_pages("Муза")
+    assert len(pages) == 6
+    assert "\n\n".join(pages) == avatar_paid_caption("Муза")
+    assert all(len(page) < 600 for page in pages)
+    assert bot.send_photo.await_args.kwargs["caption"].endswith(pages[0])
+    bot.send_message.assert_not_awaited()
+    store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=42)
+
+
+@pytest.mark.asyncio
+async def test_paid_avatar_pages_are_edited_in_place_with_navigation() -> None:
+    _bot, store, worker = _worker_context("avatar_result")
+    context = list(store.delivery_context.return_value)
+    context[3] = SimpleNamespace(money_type="Муза")
+    store.delivery_context.return_value = tuple(context)
+    message = AsyncMock(spec=Message)
+    message.edit_caption = AsyncMock()
+
+    shown = await worker.show_paid_avatar_page(
+        message,
+        telegram_id=123456,
+        order_id="order-1",
+        page_index=1,
     )
-    store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=43)
+
+    assert shown
+    pages = avatar_paid_caption_pages("Муза")
+    kwargs = message.edit_caption.await_args.kwargs
+    assert kwargs["caption"] == f"<b>Часть 2 из {len(pages)}</b>\n\n{pages[1]}"
+    buttons = kwargs["reply_markup"].inline_keyboard[0]
+    assert [button.callback_data for button in buttons] == [
+        "avatar_page:order-1:0",
+        "avatar_page:order-1:2",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_last_paid_avatar_page_exposes_followup_actions() -> None:
+    _bot, store, worker = _worker_context("avatar_result")
+    context = list(store.delivery_context.return_value)
+    context[3] = SimpleNamespace(money_type="Муза")
+    store.delivery_context.return_value = tuple(context)
+    message = AsyncMock(spec=Message)
+    message.edit_caption = AsyncMock()
+    last_page_index = len(avatar_paid_caption_pages("Муза")) - 1
+
+    assert await worker.show_paid_avatar_page(
+        message,
+        telegram_id=123456,
+        order_id="order-1",
+        page_index=last_page_index,
+    )
+
+    rows = message.edit_caption.await_args.kwargs["reply_markup"].inline_keyboard
+    assert rows[1][0].text == FULL_READING_TRIGGER_TEXT
+    assert rows[1][0].callback_data == "full:order-1"
+    assert rows[2][0].text == NEW_PROFILE_TRIGGER_TEXT
+    assert rows[2][0].callback_data == "profile:new"
+
+
+@pytest.mark.asyncio
+async def test_paid_avatar_page_rejects_another_user() -> None:
+    _bot, _store, worker = _worker_context("avatar_result")
+    message = AsyncMock(spec=Message)
+    message.edit_caption = AsyncMock()
+
+    shown = await worker.show_paid_avatar_page(
+        message,
+        telegram_id=999999,
+        order_id="order-1",
+        page_index=1,
+    )
+
+    assert not shown
+    message.edit_caption.assert_not_awaited()
 
 
 @pytest.mark.asyncio

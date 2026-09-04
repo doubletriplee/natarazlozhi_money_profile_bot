@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
-
-TELEGRAM_CAPTION_LIMIT = 1024
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 INTRO_CAPTION = """Узнай свой Денежный аватар 💫
 
@@ -497,23 +493,16 @@ def avatar_paid_caption(money_type: str) -> str:
     )
 
 
-def avatar_paid_caption_parts(money_type: str) -> tuple[str, ...]:
-    """Split a paid result on block boundaries when it exceeds Telegram's caption limit."""
+def avatar_paid_caption_pages(money_type: str) -> tuple[str, ...]:
+    """Return short semantic pages so Telegram never opens a paid result at its end."""
 
-    blocks = avatar_paid_caption(money_type).split("\n\n")
-    parts: list[str] = []
-    current = blocks[0]
-    for block in blocks[1:]:
-        candidate = f"{current}\n\n{block}"
-        if len(_HTML_TAG_RE.sub("", candidate)) <= TELEGRAM_CAPTION_LIMIT:
-            current = candidate
-            continue
-        parts.append(current)
-        current = block
-    parts.append(current)
-    if any(len(_HTML_TAG_RE.sub("", part)) > TELEGRAM_CAPTION_LIMIT for part in parts):
-        raise ValueError("paid avatar block exceeds Telegram caption limit")
-    return tuple(parts)
+    avatar = display_avatar_name(money_type)
+    strength, *sections = AVATAR_PRESENTATIONS[avatar].caption.split("\n\n")
+    return (
+        f"<b>{avatar}</b>\n\n{strength}",
+        f"<b>Профессии:</b>\n\n{AVATAR_PROFESSIONS[avatar]}",
+        *sections,
+    )
 
 
 def sales_telegram_url(username: str) -> str:

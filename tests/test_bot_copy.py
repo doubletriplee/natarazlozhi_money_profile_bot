@@ -41,7 +41,7 @@ from money_profile_bot.services.avatar import (
     AvatarAssets,
     avatar_free_caption,
     avatar_paid_caption,
-    avatar_paid_caption_parts,
+    avatar_paid_caption_pages,
     sales_telegram_url,
     strength_offer_caption,
 )
@@ -159,9 +159,10 @@ def test_every_avatar_has_channel_and_professions_copy() -> None:
             "<b>Профессии:</b>"
         )
         assert paid_caption.index("<b>Профессии:</b>") < paid_caption.index("<b>Формат работы:</b>")
-        parts = avatar_paid_caption_parts(avatar_name)
-        assert "\n\n".join(parts) == paid_caption
-        assert all(len(re.sub(r"<[^>]+>", "", part)) <= 1024 for part in parts)
+        pages = avatar_paid_caption_pages(avatar_name)
+        assert "\n\n".join(pages) == paid_caption
+        assert len(pages) == 6
+        assert all(len(re.sub(r"<[^>]+>", "", page)) < 600 for page in pages)
 
 
 def test_money_steps_match_approved_copy() -> None:
@@ -405,6 +406,38 @@ async def test_new_profile_button_restarts_with_consent() -> None:
     state.clear.assert_awaited_once_with()
     state.set_state.assert_awaited_once_with(ProfileForm.consent)
     callback.message.answer_photo.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_paid_avatar_page_button_opens_requested_owned_page() -> None:
+    delivery = AsyncMock()
+    delivery.show_paid_avatar_page.return_value = True
+    router = build_router(
+        Settings(_env_file=None),
+        AsyncMock(),
+        AsyncMock(),
+        AvatarAssets(ASSET_DIRECTORY),
+        delivery,
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "paid_avatar_page"
+    )
+    callback = AsyncMock()
+    callback.data = "avatar_page:order-1:2"
+    callback.from_user.id = 123456
+    callback.message = AsyncMock(spec=Message)
+
+    await handler(callback)
+
+    delivery.show_paid_avatar_page.assert_awaited_once_with(
+        callback.message,
+        telegram_id=123456,
+        order_id="order-1",
+        page_index=2,
+    )
+    callback.answer.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio

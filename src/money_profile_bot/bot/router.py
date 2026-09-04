@@ -1214,6 +1214,28 @@ def build_router(
         await callback.answer("Полный разбор уже ниже")
         await delivery.deliver(order_id)
 
+    @router.callback_query(F.data.startswith("avatar_page:"))
+    async def paid_avatar_page(callback: CallbackQuery) -> None:
+        if not isinstance(callback.message, Message):
+            await callback.answer("Страница разбора недоступна.", show_alert=True)
+            return
+        try:
+            _, order_id, raw_page_index = (callback.data or "").split(":", maxsplit=2)
+            page_index = int(raw_page_index)
+        except ValueError:
+            await callback.answer("Кнопка устарела. Открой разбор через /profile.", show_alert=True)
+            return
+        shown = await delivery.show_paid_avatar_page(
+            callback.message,
+            telegram_id=callback.from_user.id,
+            order_id=order_id,
+            page_index=page_index,
+        )
+        if not shown:
+            await callback.answer("Кнопка устарела. Открой разбор через /profile.", show_alert=True)
+            return
+        await callback.answer()
+
     @router.callback_query(F.data == "profile:new")
     async def new_profile(callback: CallbackQuery, state: FSMContext) -> None:
         await store.cancel_form_reminder(callback.from_user.id)

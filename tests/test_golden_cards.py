@@ -12,7 +12,7 @@ from money_profile_bot.services.astro import calculate_chart
 from money_profile_bot.services.avatar import (
     AvatarAssets,
     avatar_free_caption,
-    avatar_paid_caption_parts,
+    avatar_paid_caption_pages,
 )
 from money_profile_bot.services.rules import generate_profile, validate_generated_profile
 
@@ -67,7 +67,7 @@ def test_approved_golden_card_stays_unchanged(case: dict[str, Any]) -> None:
     assert _digest(facts.to_dict()) == expected["chart_sha256"]
     assert _digest(profile.to_dict()) == expected["profile_sha256"]
     assert _digest(avatar_free_caption(profile.money_type)) == expected["free_caption_sha256"]
-    assert _digest(avatar_paid_caption_parts(profile.money_type)) == expected["paid_caption_sha256"]
+    assert _digest(avatar_paid_caption_pages(profile.money_type)) == expected["paid_caption_sha256"]
 
     avatar_path = AVATAR_ASSETS.free_image(profile.money_type)
     assert avatar_path.name == expected["avatar_asset"]
