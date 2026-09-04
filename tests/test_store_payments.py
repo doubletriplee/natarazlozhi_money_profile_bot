@@ -445,6 +445,32 @@ async def test_fake_payment_has_zero_revenue_and_builds_delivery_queue(
 
 
 @pytest.mark.asyncio
+async def test_stats_excludes_finished_refunds_from_revenue(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    order_id, invoice_id, _ = await prepared_order(service, birth)
+    await service.accept_payment_callback(
+        invoice_id=invoice_id, amount_minor=14900, email="buyer@example.ru"
+    )
+
+    before_refund = await service.stats(None)
+    assert before_refund["payments"] == 1
+    assert before_refund["revenue_rub"] == 149
+
+    async with database.sessions() as session, session.begin():
+        await session.execute(
+            update(Payment)
+            .where(Payment.order_id == order_id)
+            .values(refund_status="finished", refunded_at=datetime.now(UTC))
+        )
+
+    after_refund = await service.stats(None)
+    assert after_refund["payments"] == 1
+    assert after_refund["revenue_rub"] == 0
+
+
+@pytest.mark.asyncio
 async def test_full_reading_offer_is_scheduled_one_hour_after_avatar_result(
     store: tuple[Store, Database], birth: BirthData
 ) -> None:

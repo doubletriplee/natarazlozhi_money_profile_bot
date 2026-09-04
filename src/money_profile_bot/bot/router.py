@@ -1296,7 +1296,8 @@ def build_router(
             f"Пользователи: {data['users']}\nАнкеты: {data['profiles']}\n"
             f"Офферы: {data['offers']}\nОплаты: {data['payments']}\n"
             f"Конверсия оффер → оплата: {data['conversion']:.1f}%\n"
-            f"Выручка: {data['revenue_rub']} ₽\n\nFirst-touch: {first}\nLast-touch: {last}"
+            f"Чистая выручка после возвратов: {data['revenue_rub']} ₽\n\n"
+            f"First-touch: {first}\nLast-touch: {last}"
         )
         await callback.answer()
         if callback.message:

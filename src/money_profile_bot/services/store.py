@@ -1477,7 +1477,17 @@ class Store:
                 select(func.count()).select_from(Event).where(Event.name == "offer_viewed")
             )
             payments_query = select(func.count()).select_from(Payment)
-            revenue_query = select(func.coalesce(func.sum(Payment.amount_minor), 0))
+            revenue_query = select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Payment.refund_status == "finished", 0),
+                            else_=Payment.amount_minor,
+                        )
+                    ),
+                    0,
+                )
+            )
             first_query = select(User.first_source, func.count()).group_by(User.first_source)
             last_query = select(User.last_source, func.count()).group_by(User.last_source)
             if since:
