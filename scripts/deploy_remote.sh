@@ -433,5 +433,23 @@ if [[ "$actual_image" != "$image" ]]; then
     exit 1
 fi
 
+current_image_id="$(docker inspect --format '{{.Image}}' "$running_container")"
+image_repository="${image%:*}"
+removed_image_count=0
+while IFS= read -r old_image_id; do
+    [[ -n "$old_image_id" ]] || continue
+    [[ "$old_image_id" == "$current_image_id" ]] && continue
+    if docker image rm "$old_image_id"; then
+        removed_image_count=$((removed_image_count + 1))
+    else
+        echo "Warning: could not remove old release image $old_image_id; continuing." >&2
+    fi
+done < <(docker image ls "$image_repository" --no-trunc --format '{{.ID}}' | sort -u)
+echo "Removed $removed_image_count old release image(s) from $image_repository."
+
+if ! docker builder prune --all --force; then
+    echo "Warning: could not prune the Docker build cache; continuing." >&2
+fi
+
 docker compose ps
 echo "Successfully deployed $commit"
