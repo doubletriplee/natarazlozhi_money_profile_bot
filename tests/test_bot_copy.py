@@ -209,12 +209,22 @@ def test_robokassa_email_and_payment_copy_are_explicit() -> None:
         _env_file=None,
     )
     prompt, prompt_keyboard = _payment_email_prompt(settings)
-    assert "email для электронного чека" in prompt
+    assert "email одним сообщением — он нужен для электронного чека" in prompt
     assert "деньги не спишутся" in prompt
     assert prompt_keyboard.inline_keyboard[-1][0].callback_data == "payment:cancel"
     assert _receipt_email_is_valid("buyer@example.ru")
     assert not _receipt_email_is_valid("buyer@example")
     assert not _receipt_email_is_valid("buyer @example.ru")
+
+    production_settings = Settings(
+        payment_mode=PaymentMode.ROBOKASSA,
+        robokassa_test_mode=False,
+        _env_file=None,
+    )
+    production_prompt, _ = _payment_email_prompt(production_settings)
+    assert "email одним сообщением — он нужен для электронного чека" in production_prompt
+    assert "создам счёт на 149 ₽ в Robokassa" in production_prompt
+    assert "настоящий" not in production_prompt
 
     text, keyboard = _payment_link_message(
         settings,

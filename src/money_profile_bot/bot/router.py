@@ -414,10 +414,10 @@ def _payment_email_prompt(settings: Settings) -> tuple[str, InlineKeyboardMarkup
     mode = (
         "Сейчас используется тестовая Robokassa: деньги не спишутся. "
         if settings.robokassa_test_mode
-        else "После этого я создам настоящий счёт Robokassa. "
+        else f"После этого я создам счёт на {settings.product_price_rub:.0f} ₽ в Robokassa. "
     )
     text = (
-        "Пришли email для электронного чека одним сообщением. "
+        "Пришли email одним сообщением — он нужен для электронного чека. "
         f"{mode}Перед продолжением можно ещё раз открыть условия и политику."
     )
     keyboard = InlineKeyboardMarkup(
