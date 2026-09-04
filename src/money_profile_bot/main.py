@@ -13,6 +13,7 @@ from aiogram.enums import ParseMode
 from aiohttp import web
 
 from money_profile_bot.bot.access import PrivateAccessMiddleware
+from money_profile_bot.bot.rate_limit import RateLimitMiddleware
 from money_profile_bot.bot.router import build_router, form_reminder_payload, set_commands
 from money_profile_bot.bot.storage import EncryptedDatabaseStorage
 from money_profile_bot.config import Environment, PaymentMode, Settings, ensure_runtime_directories
@@ -121,6 +122,9 @@ async def serve() -> None:
                 access = PrivateAccessMiddleware(allowed_ids, denial_text)
                 dispatcher.message.outer_middleware(access)
                 dispatcher.callback_query.outer_middleware(access)
+            rate_limit = RateLimitMiddleware()
+            dispatcher.message.outer_middleware(rate_limit)
+            dispatcher.callback_query.outer_middleware(rate_limit)
             dispatcher.include_router(
                 build_router(
                     settings,
