@@ -511,7 +511,7 @@ async def test_robokassa_buy_requests_receipt_email() -> None:
     state.update_data.assert_awaited_once_with(payment_profile_id="profile-1")
     state.set_state.assert_awaited_once_with(PaymentForm.email)
     prompt = callback.message.answer.await_args.args[0]
-    assert "email для электронного чека" in prompt
+    assert "email одним сообщением — он нужен для электронного чека" in prompt
     store.create_fake_paid_order.assert_not_awaited()
 
 
