@@ -52,7 +52,8 @@ LLM и вызовов OpenAI API.
   без установщиков и сборочных пакетов;
 - автоматические предупреждения GitHub об уязвимостях и еженедельные Dependabot-проверки Python,
   Docker и GitHub Actions;
-- `/stats`, `/delete_my_data`, публичные `/`, `/privacy`, `/consent`, `/terms`, `/source`, `/healthz`.
+- `/stats` и защищённый двухшаговый `/refund` для production-администраторов, `/delete_my_data`,
+  публичные `/`, `/privacy`, `/consent`, `/terms`, `/source`, `/healthz`.
 
 ## Локальный запуск
 
@@ -86,6 +87,19 @@ python scripts/generate_keys.py
 Рабочее состояние оплаты хранится только в закрытом серверном env. Включение и аварийное отключение
 выполняются привязанным к точному commit запросом `scripts/request_production_payments.ps1` и затем
 единственным штатным `scripts/deploy.ps1`; прямое редактирование флагов не используется.
+
+Полный production-администратор получает доступ и к статистике, и к подготовке и подтверждению
+возвратов Robokassa. Новый ID добавляется к существующему списку, не заменяя владельца, только
+привязанным к точному commit запросом и следующим штатным deploy:
+
+```powershell
+pwsh -NoProfile -File scripts/request_production_admin.ps1 -State Add `
+  -TelegramId <telegram_id> -AcknowledgeFullAdminAccess
+pwsh -NoProfile -File scripts/deploy.ps1
+```
+
+Отзыв доступа выполняется тем же сценарием с `-State Remove`; удалить последнего администратора
+нельзя.
 
 Зафиксированное решение и его границы описаны в
 [документе о платёжной модели](docs/payment-model.md).

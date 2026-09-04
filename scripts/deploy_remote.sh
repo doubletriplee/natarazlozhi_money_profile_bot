@@ -55,6 +55,9 @@ production_transition_request="$deploy_directory/.production-transition-request"
 production_transition_request_action=""
 production_payment_request="$deploy_directory/.production-payment-request"
 production_payment_request_action=""
+production_admin_request="$deploy_directory/.production-admin-request"
+production_admin_request_action=""
+production_admin_request_id=""
 deployment_started=0
 
 restore_previous_release() {
@@ -81,6 +84,9 @@ cleanup() {
     fi
     if [[ -n "$production_payment_request_action" ]]; then
         rm -f -- "$production_payment_request"
+    fi
+    if [[ -n "$production_admin_request_action" ]]; then
+        rm -f -- "$production_admin_request"
     fi
     if [[ "$0" == /tmp/money-profile-deploy-*/deploy_remote.sh ]]; then
         rm -f -- "$0"
@@ -113,12 +119,12 @@ app_env="$(sed -n 's/^APP_ENV=//p' .env | tail -n 1)"
 payment_mode="$(sed -n 's/^PAYMENT_MODE=//p' .env | tail -n 1)"
 robokassa_test_mode="$(sed -n 's/^ROBOKASSA_TEST_MODE=//p' .env | tail -n 1)"
 if [[ "$app_env" == "test" && "$payment_mode" == "fake" ]]; then
-    if [[ -f "$pilot_payment_request" || -f "$production_transition_request" || -f "$production_payment_request" ]]; then
+    if [[ -f "$pilot_payment_request" || -f "$production_transition_request" || -f "$production_payment_request" || -f "$production_admin_request" ]]; then
         echo "Release-state requests are not valid in the public test environment." >&2
         exit 1
     fi
 elif [[ "$app_env" == "staging" && "$payment_mode" == "robokassa" && "$robokassa_test_mode" == "true" ]]; then
-    if [[ -f "$pilot_payment_request" || -f "$production_transition_request" || -f "$production_payment_request" ]]; then
+    if [[ -f "$pilot_payment_request" || -f "$production_transition_request" || -f "$production_payment_request" || -f "$production_admin_request" ]]; then
         echo "Release-state requests are not valid in staging." >&2
         exit 1
     fi
@@ -160,6 +166,10 @@ elif [[ "$app_env" == "pilot" && "$payment_mode" == "robokassa" && "$robokassa_t
     fi
     if [[ -f "$production_payment_request" ]]; then
         echo "Production payment requests require APP_ENV=production." >&2
+        exit 1
+    fi
+    if [[ -f "$production_admin_request" ]]; then
+        echo "Production admin requests require APP_ENV=production." >&2
         exit 1
     fi
     if [[ -f "$pilot_payment_request" && -f "$production_transition_request" ]]; then
@@ -212,6 +222,10 @@ elif [[ "$app_env" == "production" && "$payment_mode" == "robokassa" && "$roboka
     platform_risk_acknowledged="$(sed -n 's/^PAYMENT_PLATFORM_RISK_ACKNOWLEDGED=//p' .env | tail -n 1)"
     golden_cards_approved="$(sed -n 's/^GOLDEN_CARDS_APPROVED=//p' .env | tail -n 1)"
     [[ -n "$admin_ids" ]] || { echo "Production requires ADMIN_TELEGRAM_IDS." >&2; exit 1; }
+    [[ "$admin_ids" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || {
+        echo "Production ADMIN_TELEGRAM_IDS must be a comma-separated list of positive integers." >&2
+        exit 1
+    }
     [[ -n "$password1" ]] || { echo "Production requires ROBOKASSA_PASSWORD1." >&2; exit 1; }
     [[ -n "$password2" ]] || { echo "Production requires ROBOKASSA_PASSWORD2." >&2; exit 1; }
     [[ -n "$password3" ]] || { echo "Production requires ROBOKASSA_PASSWORD3." >&2; exit 1; }
@@ -249,6 +263,25 @@ elif [[ "$app_env" == "production" && "$payment_mode" == "robokassa" && "$roboka
             echo "Production payment request targets a different commit." >&2
             exit 1
         }
+    fi
+    if [[ -f "$production_admin_request" ]]; then
+        request="$(tr -d '\r\n' < "$production_admin_request")"
+        production_admin_request_action="invalid"
+        if [[ ! "$request" =~ ^(add|remove):([1-9][0-9]*):([0-9a-f]{40})$ ]]; then
+            echo "Invalid production admin request." >&2
+            exit 1
+        fi
+        production_admin_request_action="${BASH_REMATCH[1]}"
+        production_admin_request_id="${BASH_REMATCH[2]}"
+        requested_commit="${BASH_REMATCH[3]}"
+        [[ "$requested_commit" == "$commit" ]] || {
+            echo "Production admin request targets a different commit." >&2
+            exit 1
+        }
+        if [[ -f "$production_payment_request" ]]; then
+            echo "Production payment and admin requests cannot be applied together." >&2
+            exit 1
+        fi
     fi
 else
     echo "Deployment allows only test/fake, private staging/test Robokassa, private pilot/live Robokassa, or guarded production." >&2
@@ -325,6 +358,32 @@ if [[ "$production_payment_request_action" == "enable" ]]; then
 elif [[ "$production_payment_request_action" == "disable" ]]; then
     upsert_env "PRODUCTION_LIVE_PAYMENT_REVIEWED" "false" "$next_env"
     upsert_env "LIVE_PAYMENTS_ENABLED" "false" "$next_env"
+fi
+if [[ -n "$production_admin_request_action" ]]; then
+    updated_admin_ids=""
+    admin_id_found=0
+    IFS=',' read -r -a current_admin_ids <<< "$admin_ids"
+    for current_admin_id in "${current_admin_ids[@]}"; do
+        if [[ "$current_admin_id" == "$production_admin_request_id" ]]; then
+            admin_id_found=1
+            if [[ "$production_admin_request_action" == "remove" ]]; then
+                continue
+            fi
+        fi
+        if [[ -z "$updated_admin_ids" ]]; then
+            updated_admin_ids="$current_admin_id"
+        else
+            updated_admin_ids="$updated_admin_ids,$current_admin_id"
+        fi
+    done
+    if [[ "$production_admin_request_action" == "add" && "$admin_id_found" == "0" ]]; then
+        updated_admin_ids="$updated_admin_ids,$production_admin_request_id"
+    fi
+    [[ -n "$updated_admin_ids" ]] || {
+        echo "Refusing to remove the last production administrator." >&2
+        exit 1
+    }
+    upsert_env "ADMIN_TELEGRAM_IDS" "$updated_admin_ids" "$next_env"
 fi
 if [[
     ( "$app_env" == "pilot" || "$app_env" == "production" ) &&

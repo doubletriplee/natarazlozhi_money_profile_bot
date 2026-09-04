@@ -833,5 +833,7 @@ async def test_configured_admin_list_overrides_bootstrap_identity(
     claim = await service.claim_admin_if_unset(10001)
     assert claim.is_admin
 
-    assert not await service.is_admin(10001, frozenset({20002}))
-    assert await service.is_admin(20002, frozenset({20002}))
+    configured_ids = frozenset({20002, 30003})
+    assert not await service.is_admin(10001, configured_ids)
+    assert await service.is_admin(20002, configured_ids)
+    assert await service.is_admin(30003, configured_ids)
