@@ -23,6 +23,7 @@ from aiogram.types import (
     Message,
 )
 
+from money_profile_bot.bot.calculation_gate import CalculationAdmission, CalculationGate
 from money_profile_bot.bot.states import DeleteForm, PaymentForm, ProfileForm
 from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.domain import BirthData, City, TimePrecision
@@ -555,6 +556,7 @@ def build_router(
     delivery: DeliveryWorker,
 ) -> Router:
     router = Router(name="money-profile")
+    calculation_gate = CalculationGate()
 
     @router.message(CommandStart())
     async def start(message: Message, state: FSMContext, command: CommandObject) -> None:
@@ -1015,16 +1017,29 @@ def build_router(
     async def form_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         if not isinstance(callback.message, Message):
             return
-        await callback.answer("Рассчитываю профиль…")
-        raw = await state.get_data()
-        birth = BirthData(
-            name="",
-            birth_date=date.fromisoformat(raw["birth_date"]),
-            time_precision=TimePrecision(raw["time_precision"]),
-            birth_time=time.fromisoformat(raw["birth_time"]) if raw.get("birth_time") else None,
-            city=City(**raw["city"]),
-        )
+        telegram_id = callback.from_user.id
+        admission = await calculation_gate.acquire(telegram_id)
+        if admission is CalculationAdmission.DUPLICATE:
+            await callback.answer("Профиль уже рассчитывается…")
+            return
+        if admission is CalculationAdmission.BUSY:
+            await callback.answer(
+                "Сейчас много расчётов. Попробуй ещё раз через минуту.",
+                show_alert=True,
+            )
+            return
         try:
+            await callback.answer("Рассчитываю профиль…")
+            raw = await state.get_data()
+            birth = BirthData(
+                name="",
+                birth_date=date.fromisoformat(raw["birth_date"]),
+                time_precision=TimePrecision(raw["time_precision"]),
+                birth_time=(
+                    time.fromisoformat(raw["birth_time"]) if raw.get("birth_time") else None
+                ),
+                city=City(**raw["city"]),
+            )
             facts = await asyncio.to_thread(calculate_chart, birth)
             result = generate_profile(facts)
             issues = validate_generated_profile(result)
@@ -1036,6 +1051,8 @@ def build_router(
                 f"Расчёт временно не завершён. Попробуй позже или напиши @{settings.support_username}."
             )
             return
+        finally:
+            await calculation_gate.release(telegram_id)
         await state.clear()
         await store.cancel_form_reminder(callback.from_user.id)
         await store.record_event(callback.from_user.id, "profile_calculated")
