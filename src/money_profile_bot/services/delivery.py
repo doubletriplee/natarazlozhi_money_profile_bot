@@ -17,7 +17,7 @@ from money_profile_bot.services.avatar import (
     AvatarAssets,
     avatar_paid_caption_pages,
     sales_telegram_url,
-    strength_offer_caption,
+    strength_offer_caption_pages,
 )
 from money_profile_bot.services.store import Store
 
@@ -30,6 +30,7 @@ DELIVERY_BACKGROUND_BATCH_SIZE = 10
 DELIVERY_MAX_CONSECUTIVE_FAILURES = 3
 DELIVERY_HEALTH_TIMEOUT_SECONDS = 30.0
 AVATAR_PAGE_CALLBACK_PREFIX = "avatar_page"
+STRENGTH_PAGE_CALLBACK_PREFIX = "strength_page"
 
 
 class DeliveryWorker:
@@ -237,15 +238,20 @@ class DeliveryWorker:
                 return False
             if context is None:
                 return False
+            pages = strength_offer_caption_pages(
+                robokassa=self.payment_mode is PaymentMode.ROBOKASSA,
+                test_mode=self.robokassa_test_mode,
+            )
             try:
                 sent = await self.bot.send_photo(
                     context.telegram_id,
                     FSInputFile(self.avatars.offer_image(context.money_type)),
-                    caption=strength_offer_caption(
-                        robokassa=self.payment_mode is PaymentMode.ROBOKASSA,
-                        test_mode=self.robokassa_test_mode,
+                    caption=self._strength_offer_page_caption(pages, 0),
+                    reply_markup=self._strength_offer_page_keyboard(
+                        context.profile_id,
+                        page_index=0,
+                        page_count=len(pages),
                     ),
-                    reply_markup=self._strength_offer_keyboard(context.profile_id),
                 )
             except (TelegramAPIError, OSError, RuntimeError, ValueError) as exc:
                 logger.warning(
@@ -271,6 +277,80 @@ class DeliveryWorker:
                 ]
             ]
         )
+
+    def _strength_offer_page_keyboard(
+        self, profile_id: str, *, page_index: int, page_count: int
+    ) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = []
+        navigation: list[InlineKeyboardButton] = []
+        if page_index > 0:
+            navigation.append(
+                InlineKeyboardButton(
+                    text=f"← {page_index} из {page_count}",
+                    callback_data=(
+                        f"{STRENGTH_PAGE_CALLBACK_PREFIX}:{profile_id}:{page_index - 1}"
+                    ),
+                )
+            )
+        if page_index + 1 < page_count:
+            navigation.append(
+                InlineKeyboardButton(
+                    text=f"Дальше · {page_index + 2} из {page_count} →",
+                    callback_data=(
+                        f"{STRENGTH_PAGE_CALLBACK_PREFIX}:{profile_id}:{page_index + 1}"
+                    ),
+                )
+            )
+        if navigation:
+            rows.append(navigation)
+        if page_index == page_count - 1:
+            rows.extend(self._strength_offer_keyboard(profile_id).inline_keyboard)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @staticmethod
+    def _strength_offer_page_caption(pages: tuple[str, ...], page_index: int) -> str:
+        return f"<b>Часть {page_index + 1} из {len(pages)}</b>\n\n{pages[page_index]}"
+
+    async def show_strength_offer_page(
+        self,
+        message: Message,
+        *,
+        telegram_id: int,
+        profile_id: str,
+        page_index: int,
+    ) -> bool:
+        try:
+            access = await self.store.profile_access(telegram_id, profile_id=profile_id)
+        except Exception as exc:
+            logger.warning(
+                "strength offer page context unavailable",
+                extra={"profile_id": profile_id, "error": type(exc).__name__},
+            )
+            return False
+        if not access or access.profile_id != profile_id:
+            return False
+        pages = strength_offer_caption_pages(
+            robokassa=self.payment_mode is PaymentMode.ROBOKASSA,
+            test_mode=self.robokassa_test_mode,
+        )
+        if not 0 <= page_index < len(pages):
+            return False
+        try:
+            await message.edit_caption(
+                caption=self._strength_offer_page_caption(pages, page_index),
+                reply_markup=self._strength_offer_page_keyboard(
+                    profile_id,
+                    page_index=page_index,
+                    page_count=len(pages),
+                ),
+            )
+        except (TelegramAPIError, OSError, RuntimeError, ValueError):
+            logger.warning(
+                "strength offer page edit failed",
+                extra={"profile_id": profile_id, "page_index": page_index},
+            )
+            return False
+        return True
 
     @staticmethod
     def _full_reading_trigger_keyboard(order_id: str) -> InlineKeyboardMarkup:

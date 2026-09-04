@@ -13,11 +13,11 @@ from money_profile_bot.models import DeliveryStatus, OrderStatus
 from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
     SALES_MESSAGE_TEXT,
-    STRENGTH_OFFER_CAPTION,
     AvatarAssets,
     avatar_paid_caption,
     avatar_paid_caption_pages,
     strength_offer_caption,
+    strength_offer_caption_pages,
 )
 from money_profile_bot.services.delivery import (
     FULL_READING_TRIGGER_TEXT,
@@ -183,7 +183,7 @@ async def test_full_reading_offer_is_sent_as_one_photo_post() -> None:
 
 
 @pytest.mark.asyncio
-async def test_strength_offer_is_sent_with_payment_button() -> None:
+async def test_strength_offer_starts_with_first_short_page() -> None:
     bot, store, worker = _worker_context("avatar_result")
     store.strength_offer_context.return_value = SimpleNamespace(
         offer_id="offer-1",
@@ -203,11 +203,51 @@ async def test_strength_offer_is_sent_with_payment_button() -> None:
         "profile-1", telegram_id=123456, force=True
     )
     kwargs = bot.send_photo.await_args.kwargs
-    assert kwargs["caption"] == STRENGTH_OFFER_CAPTION
+    pages = strength_offer_caption_pages(robokassa=False, test_mode=True)
+    assert kwargs["caption"] == f"<b>Часть 1 из 3</b>\n\n{pages[0]}"
     button = kwargs["reply_markup"].inline_keyboard[0][0]
-    assert button.text == "Раскрыть силу — 149₽ · тест"
-    assert button.callback_data == "buy:profile-1"
+    assert button.text == "Дальше · 2 из 3 →"
+    assert button.callback_data == "strength_page:profile-1:1"
     store.mark_strength_offer_sent.assert_awaited_once_with("offer-1", 42)
+
+
+@pytest.mark.asyncio
+async def test_last_strength_offer_page_exposes_payment_button() -> None:
+    _bot, store, worker = _worker_context("avatar_result")
+    store.profile_access.return_value = SimpleNamespace(profile_id="profile-1")
+    message = AsyncMock(spec=Message)
+    message.edit_caption = AsyncMock()
+
+    assert await worker.show_strength_offer_page(
+        message,
+        telegram_id=123456,
+        profile_id="profile-1",
+        page_index=2,
+    )
+
+    kwargs = message.edit_caption.await_args.kwargs
+    pages = strength_offer_caption_pages(robokassa=False, test_mode=True)
+    assert kwargs["caption"] == f"<b>Часть 3 из 3</b>\n\n{pages[2]}"
+    rows = kwargs["reply_markup"].inline_keyboard
+    assert rows[1][0].text == "Раскрыть силу — 149₽ · тест"
+    assert rows[1][0].callback_data == "buy:profile-1"
+
+
+@pytest.mark.asyncio
+async def test_strength_offer_page_rejects_another_user() -> None:
+    _bot, store, worker = _worker_context("avatar_result")
+    store.profile_access.return_value = None
+    message = AsyncMock(spec=Message)
+    message.edit_caption = AsyncMock()
+
+    assert not await worker.show_strength_offer_page(
+        message,
+        telegram_id=999999,
+        profile_id="profile-1",
+        page_index=1,
+    )
+
+    message.edit_caption.assert_not_awaited()
 
 
 def test_robokassa_payment_button_distinguishes_test_and_live_modes() -> None:

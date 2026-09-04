@@ -62,6 +62,20 @@ def strength_offer_caption(*, robokassa: bool, test_mode: bool) -> str:
     return f"{STRENGTH_OFFER_BODY}\n\n{notice}"
 
 
+def strength_offer_caption_pages(*, robokassa: bool, test_mode: bool) -> tuple[str, ...]:
+    """Split the long offer into short pages that remain readable in Telegram."""
+
+    heading, explanation, contents, closing, notice = strength_offer_caption(
+        robokassa=robokassa,
+        test_mode=test_mode,
+    ).split("\n\n")
+    return (
+        f"{heading}\n\n{explanation}",
+        contents,
+        f"{closing}\n\n{notice}",
+    )
+
+
 FULL_READING_CAPTION = (
     "<b>А теперь соберём всю денежную картину</b>\n\n"
     "Денежный аватар показал основу. В полном разборе ты увидишь, <b>как легче "

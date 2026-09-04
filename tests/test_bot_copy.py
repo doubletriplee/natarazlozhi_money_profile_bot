@@ -44,6 +44,7 @@ from money_profile_bot.services.avatar import (
     avatar_paid_caption_pages,
     sales_telegram_url,
     strength_offer_caption,
+    strength_offer_caption_pages,
 )
 from money_profile_bot.services.store import OrderLink
 
@@ -201,6 +202,12 @@ def test_strength_offer_has_practical_transition_paragraph() -> None:
     production_caption = strength_offer_caption(robokassa=True, test_mode=False)
     assert "результат откроется после подтверждения платежа" in production_caption
     assert "деньги не списываются" not in production_caption
+    for robokassa, test_mode in ((False, True), (True, True), (True, False)):
+        caption = strength_offer_caption(robokassa=robokassa, test_mode=test_mode)
+        pages = strength_offer_caption_pages(robokassa=robokassa, test_mode=test_mode)
+        assert len(pages) == 3
+        assert "\n\n".join(pages) == caption
+        assert all(len(re.sub(r"<[^>]+>", "", page)) < 600 for page in pages)
 
 
 def test_robokassa_email_and_payment_copy_are_explicit() -> None:
@@ -436,6 +443,38 @@ async def test_paid_avatar_page_button_opens_requested_owned_page() -> None:
         telegram_id=123456,
         order_id="order-1",
         page_index=2,
+    )
+    callback.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_strength_offer_page_button_opens_requested_owned_page() -> None:
+    delivery = AsyncMock()
+    delivery.show_strength_offer_page.return_value = True
+    router = build_router(
+        Settings(_env_file=None),
+        AsyncMock(),
+        AsyncMock(),
+        AvatarAssets(ASSET_DIRECTORY),
+        delivery,
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "strength_offer_page"
+    )
+    callback = AsyncMock()
+    callback.data = "strength_page:profile-1:1"
+    callback.from_user.id = 123456
+    callback.message = AsyncMock(spec=Message)
+
+    await handler(callback)
+
+    delivery.show_strength_offer_page.assert_awaited_once_with(
+        callback.message,
+        telegram_id=123456,
+        profile_id="profile-1",
+        page_index=1,
     )
     callback.answer.assert_awaited_once_with()
 

@@ -1084,6 +1084,32 @@ def build_router(
                 show_alert=True,
             )
 
+    @router.callback_query(F.data.startswith("strength_page:"))
+    async def strength_offer_page(callback: CallbackQuery) -> None:
+        if not isinstance(callback.message, Message):
+            await callback.answer("Страница недоступна.", show_alert=True)
+            return
+        try:
+            _, profile_id, raw_page_index = (callback.data or "").split(":", maxsplit=2)
+            page_index = int(raw_page_index)
+        except ValueError:
+            await callback.answer(
+                "Кнопка устарела. Открой результат через /profile.", show_alert=True
+            )
+            return
+        shown = await delivery.show_strength_offer_page(
+            callback.message,
+            telegram_id=callback.from_user.id,
+            profile_id=profile_id,
+            page_index=page_index,
+        )
+        if not shown:
+            await callback.answer(
+                "Кнопка устарела. Открой результат через /profile.", show_alert=True
+            )
+            return
+        await callback.answer()
+
     @router.callback_query(F.data.startswith("buy:"))
     async def buy(callback: CallbackQuery, state: FSMContext) -> None:
         profile_id = (callback.data or "").split(":", 1)[1]
