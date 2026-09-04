@@ -18,6 +18,11 @@ from money_profile_bot.web.legal import (
     privacy_body,
     terms_body,
 )
+from money_profile_bot.web.security import (
+    HttpRateLimiter,
+    rate_limit_middleware,
+    security_headers_middleware,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,8 +172,14 @@ def create_web_app(
     store: Store,
     robokassa: RobokassaClient,
     delivery: DeliveryWorker | None,
+    *,
+    rate_limiter: HttpRateLimiter | None = None,
 ) -> web.Application:
-    app = web.Application(client_max_size=64 * 1024)
+    limiter = rate_limiter or HttpRateLimiter()
+    app = web.Application(
+        client_max_size=64 * 1024,
+        middlewares=[security_headers_middleware, rate_limit_middleware(limiter)],
+    )
 
     async def home(_: web.Request) -> web.Response:
         return web.Response(text=_home_page(settings), content_type="text/html")
