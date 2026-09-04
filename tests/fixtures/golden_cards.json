@@ -1,0 +1,156 @@
+[
+  {
+    "id": "exact-moscow-1990",
+    "label": "Точное время — Москва",
+    "input": {
+      "name": "",
+      "birth_date": "1990-01-15",
+      "time_precision": "exact",
+      "birth_time": "12:30:00",
+      "city": {
+        "geoname_id": 524901,
+        "name": "Москва",
+        "region": "Москва",
+        "country_code": "RU",
+        "country_name": "Россия",
+        "latitude": 55.7522,
+        "longitude": 37.6156,
+        "timezone": "Europe/Moscow"
+      }
+    },
+    "expected": {
+      "mode": "profile",
+      "warning": null,
+      "venus_possible_signs": ["Водолей"],
+      "cusp_signs": [
+        "Телец",
+        "Близнецы",
+        "Рак",
+        "Рак",
+        "Лев",
+        "Дева",
+        "Скорпион",
+        "Стрелец",
+        "Козерог",
+        "Козерог",
+        "Водолей",
+        "Рыбы"
+      ],
+      "second_house_ruler": "Меркурий",
+      "second_house_ruler_house": 9,
+      "money_type": "Проводница",
+      "strength": "гибкость, связи и несколько навыков",
+      "trap": "неясные договорённости",
+      "triggered_rule_ids": [
+        "type.ruler_house.9",
+        "cusp2.Близнецы",
+        "aspect.ruler2.Нептун.tense"
+      ],
+      "engine_version": "1.0.0",
+      "rules_version": "2026-08-29.avatar4",
+      "chart_sha256": "c31179b904c51ca016669a04e0961081b1d9fc773a9ca458feaff81b4cef976a",
+      "profile_sha256": "b7baff88d6266224439ff783f75dd7f027ccf96cf9c92b61676e37f84d62b73e",
+      "free_caption_sha256": "a34504a094e22c3d351808b7787c2ea8009d0dd6f1a574d0dcf13805e4108053",
+      "paid_caption_sha256": "1ba6ae3b5432d4342ee2b242f24d665ef21a64273f403b95dbcd68ad06576417",
+      "avatar_asset": "avatar_guide.png",
+      "avatar_sha256": "2892f79a6b64f43ca121fdb375c887d2394bb2c7b52522543a7ef5e680142336"
+    }
+  },
+  {
+    "id": "approximate-saint-petersburg-1985",
+    "label": "Примерное время — Санкт-Петербург",
+    "input": {
+      "name": "",
+      "birth_date": "1985-07-24",
+      "time_precision": "approximate",
+      "birth_time": "18:15:00",
+      "city": {
+        "geoname_id": 498817,
+        "name": "Санкт-Петербург",
+        "region": "Санкт-Петербург",
+        "country_code": "RU",
+        "country_name": "Россия",
+        "latitude": 59.9386,
+        "longitude": 30.3141,
+        "timezone": "Europe/Moscow"
+      }
+    },
+    "expected": {
+      "mode": "profile",
+      "warning": "Время указано примерно: положения планет рассчитаны по введённому времени, но дома карты могут быть неточными.",
+      "venus_possible_signs": ["Близнецы"],
+      "cusp_signs": [
+        "Скорпион",
+        "Козерог",
+        "Водолей",
+        "Овен",
+        "Телец",
+        "Телец",
+        "Телец",
+        "Рак",
+        "Лев",
+        "Весы",
+        "Скорпион",
+        "Скорпион"
+      ],
+      "second_house_ruler": "Сатурн",
+      "second_house_ruler_house": 12,
+      "money_type": "Искательница",
+      "strength": "дисциплина и долгосрочная стратегия",
+      "trap": "слишком много предложений",
+      "triggered_rule_ids": [
+        "type.ruler_house.12",
+        "cusp2.Козерог",
+        "aspect.ruler2.Меркурий.tense"
+      ],
+      "engine_version": "1.0.0",
+      "rules_version": "2026-08-29.avatar4",
+      "chart_sha256": "74bb458ddb03bd35c0e282f204b19afa953a8f57d266bac8801133dbe851d670",
+      "profile_sha256": "c0f803738d258d0885765f8337250281e7a1b8fa4aae32e7a575a145033b129f",
+      "free_caption_sha256": "0787920152eaea830aa3f0416b4505df0d460de7f0342e8c2ec5c855fbb5c685",
+      "paid_caption_sha256": "f4fc15735649a92e09605129979dd59414ae64bf0376b0734a0ec0363676cec0",
+      "avatar_asset": "avatar_seeker.png",
+      "avatar_sha256": "7f31b44028c9dfabefbab09bffa9025150ebadf280cb3f14ca5d42b3b69dc4f1"
+    }
+  },
+  {
+    "id": "unknown-berlin-1996",
+    "label": "Время неизвестно — Берлин",
+    "input": {
+      "name": "",
+      "birth_date": "1996-11-03",
+      "time_precision": "unknown",
+      "birth_time": null,
+      "city": {
+        "geoname_id": 2950159,
+        "name": "Берлин",
+        "region": "Берлин",
+        "country_code": "DE",
+        "country_name": "Германия",
+        "latitude": 52.52437,
+        "longitude": 13.41053,
+        "timezone": "Europe/Berlin"
+      }
+    },
+    "expected": {
+      "mode": "style",
+      "warning": "Время рождения неизвестно: используются только показатели, стабильные в течение суток, без домов карты.",
+      "venus_possible_signs": ["Весы"],
+      "cusp_signs": null,
+      "second_house_ruler": null,
+      "second_house_ruler_house": null,
+      "money_type": "Рассказчица",
+      "strength": "дипломатия, эстетика и партнёрство",
+      "trap": "зависимость от одобрения",
+      "triggered_rule_ids": ["style.venus_element.воздух"],
+      "engine_version": "1.0.0",
+      "rules_version": "2026-08-29.avatar4",
+      "chart_sha256": "a0446992bc7b68103ad6e8f03f97aba88ec6b65d84eb975d4170c7bbfbfa1a53",
+      "profile_sha256": "4d911759b74f606c2b5b0886289cd2b023aaacebdf30be938ad694c48009662e",
+      "free_caption_sha256": "3d71ad7f09e82139d7d76adbc3593a14b3ae9c017bdad126543a2b91265ce994",
+      "paid_caption_sha256": "25892b605f7b0d9f8535cb950269a7e7cc876ee1791f8a7674410ddb90d1f00e",
+      "avatar_asset": "avatar_storyteller.png",
+      "avatar_sha256": "45739b98c248e6e0e8a000a3b9967f9f804e07e33d6afd73e386e7840181f78f"
+    }
+  }
+]
