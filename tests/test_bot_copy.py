@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from aiogram.types import Message
 
 from money_profile_bot.bot.router import (
     _accept_consent,
@@ -356,6 +357,40 @@ async def test_start_command_is_deleted_from_private_chat() -> None:
 
 
 @pytest.mark.asyncio
+async def test_new_profile_button_restarts_with_consent() -> None:
+    settings = Settings(_env_file=None)
+    store = AsyncMock()
+    router = build_router(
+        settings,
+        store,
+        AsyncMock(),
+        AvatarAssets(ASSET_DIRECTORY),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "new_profile"
+    )
+    callback = AsyncMock()
+    callback.data = "profile:new"
+    callback.from_user.id = 123456
+    callback.message = AsyncMock(spec=Message)
+    callback.message.answer_photo = AsyncMock()
+    state = AsyncMock()
+
+    await handler(callback, state)
+
+    store.cancel_form_reminder.assert_awaited_once_with(123456)
+    reminder = store.schedule_form_reminder.await_args
+    assert reminder.args == (123456,)
+    assert reminder.kwargs["state"] == "consent"
+    state.clear.assert_awaited_once_with()
+    state.set_state.assert_awaited_once_with(ProfileForm.consent)
+    callback.message.answer_photo.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_consent_skips_name_and_requests_birth_date() -> None:
     callback = AsyncMock()
     callback.from_user.id = 123456
@@ -462,6 +497,7 @@ async def test_robokassa_buy_requests_receipt_email() -> None:
 
     await handler(callback, state)
 
+    store.profile_access.assert_awaited_once_with(123456, profile_id="profile-1")
     state.update_data.assert_awaited_once_with(payment_profile_id="profile-1")
     state.set_state.assert_awaited_once_with(PaymentForm.email)
     prompt = callback.message.answer.await_args.args[0]
@@ -537,6 +573,7 @@ async def test_receipt_email_creates_robokassa_invoice_link() -> None:
 
     await handler(message, state)
 
+    store.profile_access.assert_awaited_once_with(123456, profile_id="profile-1")
     store.create_order.assert_awaited_once_with(
         telegram_id=123456,
         profile_id="profile-1",

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -18,7 +18,7 @@ from money_profile_bot.bot.storage import EncryptedDatabaseStorage
 from money_profile_bot.config import Settings
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
-from money_profile_bot.domain import BirthData
+from money_profile_bot.domain import BirthData, ChartFacts
 from money_profile_bot.models import (
     AdminIdentity,
     Consent,
@@ -29,6 +29,7 @@ from money_profile_bot.models import (
     Order,
     OrderStatus,
     Payment,
+    Profile,
     ProfileStatus,
     StrengthOffer,
 )
@@ -88,6 +89,20 @@ async def prepared_order(store: Store, birth: BirthData) -> tuple[str, int, str]
         order = await session.get(Order, link.order_id)
         assert order is not None
         return link.order_id, order.provider_invoice_id, profile_id
+
+
+def style_facts() -> ChartFacts:
+    return ChartFacts(
+        mode="style",
+        warning="Тест без домов карты.",
+        planets={},
+        aspects=(),
+        cusps=None,
+        cusp_signs=None,
+        second_house_ruler=None,
+        second_house_ruler_house=None,
+        venus_possible_signs=("Овен",),
+    )
 
 
 @pytest.mark.asyncio
@@ -196,6 +211,54 @@ async def test_successful_callback_locks_profile_and_builds_delivery_queue(
         payments = await session.scalar(select(func.count()).select_from(Payment))
     assert count == 2
     assert payments == 1
+
+
+@pytest.mark.asyncio
+async def test_paid_profile_does_not_block_a_new_calculation(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, database = store
+    facts = style_facts()
+    result = generate_profile(facts)
+    first_profile_id = await service.save_calculation(10001, birth, facts, result)
+    link = await service.create_order(
+        telegram_id=10001,
+        profile_id=first_profile_id,
+        email="buyer@example.ru",
+        amount_minor=14900,
+    )
+    async with database.sessions() as session:
+        first_order = await session.get(Order, link.order_id)
+        assert first_order is not None
+        invoice_id = first_order.provider_invoice_id
+    await service.accept_payment_callback(
+        invoice_id=invoice_id, amount_minor=14900, email="buyer@example.ru"
+    )
+
+    second_birth = replace(birth, birth_date=date(1992, 2, 2))
+    second_profile_id = await service.save_calculation(10001, second_birth, facts, result)
+
+    latest_access = await service.profile_access(10001)
+    first_access = await service.profile_access(10001, profile_id=first_profile_id)
+    second_access = await service.profile_access(10001, profile_id=second_profile_id)
+    assert second_profile_id != first_profile_id
+    assert latest_access is not None and latest_access.profile_id == second_profile_id
+    assert first_access is not None and first_access.order_status == OrderStatus.PAID
+    assert second_access is not None and second_access.order_status is None
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(Profile)) == 2
+
+
+@pytest.mark.asyncio
+async def test_profile_access_by_id_rejects_another_user(
+    store: tuple[Store, Database], birth: BirthData
+) -> None:
+    service, _ = store
+    facts = style_facts()
+    result = generate_profile(facts)
+    profile_id = await service.save_calculation(10001, birth, facts, result)
+
+    assert await service.profile_access(20002, profile_id=profile_id) is None
 
 
 @pytest.mark.asyncio

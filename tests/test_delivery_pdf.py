@@ -18,7 +18,11 @@ from money_profile_bot.services.avatar import (
     avatar_paid_caption_parts,
     strength_offer_caption,
 )
-from money_profile_bot.services.delivery import FULL_READING_TRIGGER_TEXT, DeliveryWorker
+from money_profile_bot.services.delivery import (
+    FULL_READING_TRIGGER_TEXT,
+    NEW_PROFILE_TRIGGER_TEXT,
+    DeliveryWorker,
+)
 
 ASSET_DIRECTORY = Path("assets/avatars")
 
@@ -70,6 +74,9 @@ async def test_paid_avatar_is_sent_as_photo_with_complete_text() -> None:
     button = kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == FULL_READING_TRIGGER_TEXT
     assert button.callback_data == "full:order-1"
+    new_profile_button = kwargs["reply_markup"].inline_keyboard[1][0]
+    assert new_profile_button.text == NEW_PROFILE_TRIGGER_TEXT
+    assert new_profile_button.callback_data == "profile:new"
     bot.send_message.assert_not_awaited()
     store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=42)
     store.complete_delivery_if_ready.assert_awaited_once_with("order-1")
@@ -92,6 +99,10 @@ async def test_long_paid_avatar_is_continued_without_truncating_approved_copy() 
     assert bot.send_message.await_args.args == (123456, parts[1])
     button = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0]
     assert button.text == FULL_READING_TRIGGER_TEXT
+    assert (
+        bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[1][0].callback_data
+        == "profile:new"
+    )
     store.mark_delivery_item.assert_awaited_once_with(1, status=DeliveryStatus.SENT, message_id=43)
 
 

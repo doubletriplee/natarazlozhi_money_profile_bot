@@ -24,6 +24,7 @@ from money_profile_bot.services.store import Store
 logger = logging.getLogger(__name__)
 
 FULL_READING_TRIGGER_TEXT = "Узнать всю денежную картину"
+NEW_PROFILE_TRIGGER_TEXT = "Рассчитать другой аватар"
 DELIVERY_ORDER_BATCH_SIZE = 50
 DELIVERY_BACKGROUND_BATCH_SIZE = 10
 DELIVERY_MAX_CONSECUTIVE_FAILURES = 3
@@ -279,7 +280,13 @@ class DeliveryWorker:
                         text=FULL_READING_TRIGGER_TEXT,
                         callback_data=f"full:{order_id}",
                     )
-                ]
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=NEW_PROFILE_TRIGGER_TEXT,
+                        callback_data="profile:new",
+                    )
+                ],
             ]
         )
 

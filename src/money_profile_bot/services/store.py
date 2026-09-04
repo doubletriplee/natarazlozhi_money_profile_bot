@@ -206,17 +206,6 @@ class Store:
         user = await self.ensure_user(telegram_id)
         profile_id = new_id()
         async with self.sessions() as session, session.begin():
-            existing = await session.scalar(
-                select(Profile)
-                .where(
-                    Profile.user_id == user.id,
-                    Profile.status.in_((ProfileStatus.PAID, ProfileStatus.CALCULATED)),
-                    Profile.deleted_at.is_(None),
-                )
-                .order_by(Profile.created_at.desc())
-            )
-            if existing and existing.locked:
-                return existing.id
             profile = Profile(
                 id=profile_id,
                 user_id=user.id,
@@ -587,15 +576,20 @@ class Store:
                 ),
             )
 
-    async def profile_access(self, telegram_id: int) -> ProfileAccess | None:
+    async def profile_access(
+        self, telegram_id: int, *, profile_id: str | None = None
+    ) -> ProfileAccess | None:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
         async with self.sessions() as session:
-            profile = await session.scalar(
+            query = (
                 select(Profile)
                 .join(User)
                 .where(User.telegram_id_hash == digest, Profile.deleted_at.is_(None))
                 .order_by(Profile.created_at.desc())
             )
+            if profile_id is not None:
+                query = query.where(Profile.id == profile_id)
+            profile = await session.scalar(query)
             if not profile:
                 return None
             order = await session.scalar(

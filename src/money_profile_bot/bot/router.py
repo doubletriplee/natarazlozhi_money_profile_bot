@@ -1077,14 +1077,14 @@ def build_router(
             await callback.answer("Разбор силы уже ниже")
         else:
             await callback.answer(
-                "Предложение уже отправлено или недоступно.",
+                "Эта кнопка уже неактивна. Для нового аватара отправь /start.",
                 show_alert=True,
             )
 
     @router.callback_query(F.data.startswith("buy:"))
     async def buy(callback: CallbackQuery, state: FSMContext) -> None:
         profile_id = (callback.data or "").split(":", 1)[1]
-        access = await store.profile_access(callback.from_user.id)
+        access = await store.profile_access(callback.from_user.id, profile_id=profile_id)
         if not access or access.profile_id != profile_id:
             await callback.answer("Профиль не найден. Начни с /start.", show_alert=True)
             return
@@ -1172,7 +1172,11 @@ def build_router(
             return
         raw = await state.get_data()
         profile_id = raw.get("payment_profile_id")
-        access = await store.profile_access(message.from_user.id)
+        access = (
+            await store.profile_access(message.from_user.id, profile_id=profile_id)
+            if isinstance(profile_id, str)
+            else None
+        )
         if not isinstance(profile_id, str) or not access or access.profile_id != profile_id:
             await state.clear()
             await message.answer("Профиль не найден. Начни заново с /start.")
@@ -1206,6 +1210,20 @@ def build_router(
             return
         await callback.answer("Полный разбор уже ниже")
         await delivery.deliver(order_id)
+
+    @router.callback_query(F.data == "profile:new")
+    async def new_profile(callback: CallbackQuery, state: FSMContext) -> None:
+        await store.cancel_form_reminder(callback.from_user.id)
+        await _schedule_form_reminder(
+            store,
+            callback.from_user.id,
+            state="consent",
+            text=CONSENT_REMINDER_PROMPT,
+            reply_markup=_intro_keyboard(settings),
+        )
+        await callback.answer("Начинаем новый расчёт")
+        if isinstance(callback.message, Message):
+            await _begin(callback.message, state, settings, avatars)
 
     @router.message(Command("profile"))
     async def profile(message: Message) -> None:
@@ -1354,7 +1372,7 @@ def build_router(
 async def set_commands(bot: Any) -> None:
     await bot.set_my_commands(
         [
-            BotCommand(command="start", description="Начать расчёт"),
+            BotCommand(command="start", description="Рассчитать новый аватар"),
             BotCommand(command="profile", description="Показать сохранённый аватар"),
             BotCommand(command="support", description="Поддержка"),
             BotCommand(command="paysupport", description="Вопросы по оплате"),
