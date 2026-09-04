@@ -162,8 +162,8 @@ class Store:
                 return AdminClaim(True, True)
 
     async def is_admin(self, telegram_id: int, configured_ids: frozenset[int]) -> bool:
-        if telegram_id in configured_ids:
-            return True
+        if configured_ids:
+            return telegram_id in configured_ids
         digest = self.crypto.lookup(str(telegram_id), context="admin-telegram-id")
         async with self.sessions() as session:
             identity = await session.get(AdminIdentity, 1)

@@ -728,3 +728,15 @@ async def test_first_start_admin_claim_is_atomic(store: tuple[Store, Database]) 
     assert not await service.is_admin(loser, frozenset())
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(AdminIdentity)) == 1
+
+
+@pytest.mark.asyncio
+async def test_configured_admin_list_overrides_bootstrap_identity(
+    store: tuple[Store, Database],
+) -> None:
+    service, _ = store
+    claim = await service.claim_admin_if_unset(10001)
+    assert claim.is_admin
+
+    assert not await service.is_admin(10001, frozenset({20002}))
+    assert await service.is_admin(20002, frozenset({20002}))
