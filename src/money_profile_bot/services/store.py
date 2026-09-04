@@ -300,6 +300,18 @@ class Store:
             if user_id:
                 await session.execute(delete(FormReminder).where(FormReminder.user_id == user_id))
 
+    async def form_reminder_message_id(self, telegram_id: int) -> int | None:
+        digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
+        async with self.sessions() as session:
+            return await session.scalar(
+                select(FormReminder.telegram_message_id)
+                .join(User, FormReminder.user_id == User.id)
+                .where(
+                    User.telegram_id_hash == digest,
+                    FormReminder.status == DeliveryStatus.SENT,
+                )
+            )
+
     async def backfill_form_reminders(
         self,
         bot_id: int,

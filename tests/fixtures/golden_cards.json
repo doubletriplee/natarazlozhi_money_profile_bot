@@ -51,7 +51,7 @@
       "chart_sha256": "c31179b904c51ca016669a04e0961081b1d9fc773a9ca458feaff81b4cef976a",
       "profile_sha256": "b7baff88d6266224439ff783f75dd7f027ccf96cf9c92b61676e37f84d62b73e",
       "free_caption_sha256": "a34504a094e22c3d351808b7787c2ea8009d0dd6f1a574d0dcf13805e4108053",
-      "paid_caption_sha256": "d4deb3357df2de6b13935fd9fea65024ee03cf7d632993bc8687ead2572edecb",
+      "paid_caption_sha256": "1ba6ae3b5432d4342ee2b242f24d665ef21a64273f403b95dbcd68ad06576417",
       "avatar_asset": "avatar_guide.png",
       "avatar_sha256": "2892f79a6b64f43ca121fdb375c887d2394bb2c7b52522543a7ef5e680142336"
     }
@@ -108,7 +108,7 @@
       "chart_sha256": "74bb458ddb03bd35c0e282f204b19afa953a8f57d266bac8801133dbe851d670",
       "profile_sha256": "c0f803738d258d0885765f8337250281e7a1b8fa4aae32e7a575a145033b129f",
       "free_caption_sha256": "0787920152eaea830aa3f0416b4505df0d460de7f0342e8c2ec5c855fbb5c685",
-      "paid_caption_sha256": "ae315083bfc8dd5bd9e51ed8d1155dfaacb5b24ccfe547835c904d3869d28ae1",
+      "paid_caption_sha256": "f4fc15735649a92e09605129979dd59414ae64bf0376b0734a0ec0363676cec0",
       "avatar_asset": "avatar_seeker.png",
       "avatar_sha256": "7f31b44028c9dfabefbab09bffa9025150ebadf280cb3f14ca5d42b3b69dc4f1"
     }
@@ -148,7 +148,7 @@
       "chart_sha256": "a0446992bc7b68103ad6e8f03f97aba88ec6b65d84eb975d4170c7bbfbfa1a53",
       "profile_sha256": "4d911759b74f606c2b5b0886289cd2b023aaacebdf30be938ad694c48009662e",
       "free_caption_sha256": "3d71ad7f09e82139d7d76adbc3593a14b3ae9c017bdad126543a2b91265ce994",
-      "paid_caption_sha256": "a6d19090a5261a49c16677a54afbf066fec36764bb41db651014409abd2dcec0",
+      "paid_caption_sha256": "25892b605f7b0d9f8535cb950269a7e7cc876ee1791f8a7674410ddb90d1f00e",
       "avatar_asset": "avatar_storyteller.png",
       "avatar_sha256": "45739b98c248e6e0e8a000a3b9967f9f804e07e33d6afd73e386e7840181f78f"
     }

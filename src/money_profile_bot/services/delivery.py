@@ -11,13 +11,13 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from money_profile_bot.config import PaymentMode
-from money_profile_bot.models import DeliveryStatus, OrderStatus
+from money_profile_bot.models import DeliveryStatus
 from money_profile_bot.services.avatar import (
     FULL_READING_CAPTION,
     AvatarAssets,
-    avatar_paid_caption_pages,
+    avatar_paid_caption_parts,
     sales_telegram_url,
-    strength_offer_caption_pages,
+    strength_offer_caption,
 )
 from money_profile_bot.services.store import Store
 
@@ -29,8 +29,6 @@ DELIVERY_ORDER_BATCH_SIZE = 50
 DELIVERY_BACKGROUND_BATCH_SIZE = 10
 DELIVERY_MAX_CONSECUTIVE_FAILURES = 3
 DELIVERY_HEALTH_TIMEOUT_SECONDS = 30.0
-AVATAR_PAGE_CALLBACK_PREFIX = "avatar_page"
-STRENGTH_PAGE_CALLBACK_PREFIX = "strength_page"
 
 
 class DeliveryWorker:
@@ -238,20 +236,15 @@ class DeliveryWorker:
                 return False
             if context is None:
                 return False
-            pages = strength_offer_caption_pages(
-                robokassa=self.payment_mode is PaymentMode.ROBOKASSA,
-                test_mode=self.robokassa_test_mode,
-            )
             try:
                 sent = await self.bot.send_photo(
                     context.telegram_id,
                     FSInputFile(self.avatars.offer_image(context.money_type)),
-                    caption=self._strength_offer_page_caption(pages, 0),
-                    reply_markup=self._strength_offer_page_keyboard(
-                        context.profile_id,
-                        page_index=0,
-                        page_count=len(pages),
+                    caption=strength_offer_caption(
+                        robokassa=self.payment_mode is PaymentMode.ROBOKASSA,
+                        test_mode=self.robokassa_test_mode,
                     ),
+                    reply_markup=self._strength_offer_keyboard(context.profile_id),
                 )
             except (TelegramAPIError, OSError, RuntimeError, ValueError) as exc:
                 logger.warning(
@@ -278,80 +271,6 @@ class DeliveryWorker:
             ]
         )
 
-    def _strength_offer_page_keyboard(
-        self, profile_id: str, *, page_index: int, page_count: int
-    ) -> InlineKeyboardMarkup:
-        rows: list[list[InlineKeyboardButton]] = []
-        navigation: list[InlineKeyboardButton] = []
-        if page_index > 0:
-            navigation.append(
-                InlineKeyboardButton(
-                    text=f"← {page_index} из {page_count}",
-                    callback_data=(
-                        f"{STRENGTH_PAGE_CALLBACK_PREFIX}:{profile_id}:{page_index - 1}"
-                    ),
-                )
-            )
-        if page_index + 1 < page_count:
-            navigation.append(
-                InlineKeyboardButton(
-                    text=f"Дальше · {page_index + 2} из {page_count} →",
-                    callback_data=(
-                        f"{STRENGTH_PAGE_CALLBACK_PREFIX}:{profile_id}:{page_index + 1}"
-                    ),
-                )
-            )
-        if navigation:
-            rows.append(navigation)
-        if page_index == page_count - 1:
-            rows.extend(self._strength_offer_keyboard(profile_id).inline_keyboard)
-        return InlineKeyboardMarkup(inline_keyboard=rows)
-
-    @staticmethod
-    def _strength_offer_page_caption(pages: tuple[str, ...], page_index: int) -> str:
-        return f"<b>Часть {page_index + 1} из {len(pages)}</b>\n\n{pages[page_index]}"
-
-    async def show_strength_offer_page(
-        self,
-        message: Message,
-        *,
-        telegram_id: int,
-        profile_id: str,
-        page_index: int,
-    ) -> bool:
-        try:
-            access = await self.store.profile_access(telegram_id, profile_id=profile_id)
-        except Exception as exc:
-            logger.warning(
-                "strength offer page context unavailable",
-                extra={"profile_id": profile_id, "error": type(exc).__name__},
-            )
-            return False
-        if not access or access.profile_id != profile_id:
-            return False
-        pages = strength_offer_caption_pages(
-            robokassa=self.payment_mode is PaymentMode.ROBOKASSA,
-            test_mode=self.robokassa_test_mode,
-        )
-        if not 0 <= page_index < len(pages):
-            return False
-        try:
-            await message.edit_caption(
-                caption=self._strength_offer_page_caption(pages, page_index),
-                reply_markup=self._strength_offer_page_keyboard(
-                    profile_id,
-                    page_index=page_index,
-                    page_count=len(pages),
-                ),
-            )
-        except (TelegramAPIError, OSError, RuntimeError, ValueError):
-            logger.warning(
-                "strength offer page edit failed",
-                extra={"profile_id": profile_id, "page_index": page_index},
-            )
-            return False
-        return True
-
     @staticmethod
     def _full_reading_trigger_keyboard(order_id: str) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
@@ -371,92 +290,24 @@ class DeliveryWorker:
             ]
         )
 
-    def _paid_avatar_keyboard(
-        self, order_id: str, *, page_index: int, page_count: int
-    ) -> InlineKeyboardMarkup:
-        rows: list[list[InlineKeyboardButton]] = []
-        navigation: list[InlineKeyboardButton] = []
-        if page_index > 0:
-            navigation.append(
-                InlineKeyboardButton(
-                    text=f"← {page_index} из {page_count}",
-                    callback_data=f"{AVATAR_PAGE_CALLBACK_PREFIX}:{order_id}:{page_index - 1}",
-                )
-            )
-        if page_index + 1 < page_count:
-            navigation.append(
-                InlineKeyboardButton(
-                    text=f"Дальше · {page_index + 2} из {page_count} →",
-                    callback_data=f"{AVATAR_PAGE_CALLBACK_PREFIX}:{order_id}:{page_index + 1}",
-                )
-            )
-        if navigation:
-            rows.append(navigation)
-        if page_index == page_count - 1:
-            rows.extend(self._full_reading_trigger_keyboard(order_id).inline_keyboard)
-        return InlineKeyboardMarkup(inline_keyboard=rows)
-
-    @staticmethod
-    def _paid_avatar_page_caption(pages: tuple[str, ...], page_index: int) -> str:
-        return f"<b>Часть {page_index + 1} из {len(pages)}</b>\n\n{pages[page_index]}"
-
     async def _send_paid_avatar(
         self, telegram_id: int, *, money_type: str, order_id: str
     ) -> Message:
-        pages = avatar_paid_caption_pages(money_type)
-        return await self.bot.send_photo(
+        parts = avatar_paid_caption_parts(money_type)
+        keyboard = self._full_reading_trigger_keyboard(order_id)
+        sent = await self.bot.send_photo(
             telegram_id,
             FSInputFile(self.avatars.free_image(money_type)),
-            caption=self._paid_avatar_page_caption(pages, 0),
-            reply_markup=self._paid_avatar_keyboard(
-                order_id,
-                page_index=0,
-                page_count=len(pages),
-            ),
+            caption=parts[0],
+            reply_markup=keyboard if len(parts) == 1 else None,
         )
-
-    async def show_paid_avatar_page(
-        self,
-        message: Message,
-        *,
-        telegram_id: int,
-        order_id: str,
-        page_index: int,
-    ) -> bool:
-        try:
-            order, owner_telegram_id, _birth, result, _items = await self.store.delivery_context(
-                order_id
+        for index, part in enumerate(parts[1:], start=1):
+            sent = await self.bot.send_message(
+                telegram_id,
+                part,
+                reply_markup=keyboard if index == len(parts) - 1 else None,
             )
-        except Exception as exc:
-            logger.warning(
-                "paid avatar page context unavailable",
-                extra={"order_id": order_id, "error": type(exc).__name__},
-            )
-            return False
-        if owner_telegram_id != telegram_id or order.status not in (
-            OrderStatus.PAID,
-            OrderStatus.DELIVERED,
-        ):
-            return False
-        pages = avatar_paid_caption_pages(result.money_type)
-        if not 0 <= page_index < len(pages):
-            return False
-        try:
-            await message.edit_caption(
-                caption=self._paid_avatar_page_caption(pages, page_index),
-                reply_markup=self._paid_avatar_keyboard(
-                    order_id,
-                    page_index=page_index,
-                    page_count=len(pages),
-                ),
-            )
-        except (TelegramAPIError, OSError, RuntimeError, ValueError):
-            logger.warning(
-                "paid avatar page edit failed",
-                extra={"order_id": order_id, "page_index": page_index},
-            )
-            return False
-        return True
+        return sent
 
     async def send_copy(self, order_id: str) -> None:
         order, telegram_id, _birth, result, _ = await self.store.delivery_context(order_id)

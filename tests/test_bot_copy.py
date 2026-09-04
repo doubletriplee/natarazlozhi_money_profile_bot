@@ -5,12 +5,13 @@ import re
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, call
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from aiogram.types import Message
 
+import money_profile_bot.bot.router as router_module
 from money_profile_bot.bot.router import (
     _accept_consent,
     _begin,
@@ -30,6 +31,7 @@ from money_profile_bot.bot.router import (
 )
 from money_profile_bot.bot.states import DeleteForm, PaymentForm, ProfileForm
 from money_profile_bot.config import PaymentMode, Settings
+from money_profile_bot.domain import City
 from money_profile_bot.services.avatar import (
     AVATAR_CHANNELS,
     AVATAR_PRESENTATIONS,
@@ -41,10 +43,9 @@ from money_profile_bot.services.avatar import (
     AvatarAssets,
     avatar_free_caption,
     avatar_paid_caption,
-    avatar_paid_caption_pages,
+    avatar_paid_caption_parts,
     sales_telegram_url,
     strength_offer_caption,
-    strength_offer_caption_pages,
 )
 from money_profile_bot.services.store import OrderLink
 
@@ -160,10 +161,9 @@ def test_every_avatar_has_channel_and_professions_copy() -> None:
             "<b>Профессии:</b>"
         )
         assert paid_caption.index("<b>Профессии:</b>") < paid_caption.index("<b>Формат работы:</b>")
-        pages = avatar_paid_caption_pages(avatar_name)
-        assert "\n\n".join(pages) == paid_caption
-        assert len(pages) == 6
-        assert all(len(re.sub(r"<[^>]+>", "", page)) < 600 for page in pages)
+        parts = avatar_paid_caption_parts(avatar_name)
+        assert "\n\n".join(parts) == paid_caption
+        assert all(len(re.sub(r"<[^>]+>", "", part)) <= 1024 for part in parts)
 
 
 def test_money_steps_match_approved_copy() -> None:
@@ -202,12 +202,6 @@ def test_strength_offer_has_practical_transition_paragraph() -> None:
     production_caption = strength_offer_caption(robokassa=True, test_mode=False)
     assert "результат откроется после подтверждения платежа" in production_caption
     assert "деньги не списываются" not in production_caption
-    for robokassa, test_mode in ((False, True), (True, True), (True, False)):
-        caption = strength_offer_caption(robokassa=robokassa, test_mode=test_mode)
-        pages = strength_offer_caption_pages(robokassa=robokassa, test_mode=test_mode)
-        assert len(pages) == 3
-        assert "\n\n".join(pages) == caption
-        assert all(len(re.sub(r"<[^>]+>", "", page)) < 600 for page in pages)
 
 
 def test_robokassa_email_and_payment_copy_are_explicit() -> None:
@@ -263,7 +257,7 @@ def test_birth_date_picker_covers_valid_range_and_calendar_days() -> None:
     today = date(2026, 8, 30)
 
     prompt, decades = _birth_date_picker({}, today=today)
-    assert prompt.startswith("📅 Когда ты родилась?")
+    assert prompt.startswith("📅 Укажи дату рождения.")
     decade_buttons = [button for row in decades.inline_keyboard for button in row]
     assert decade_buttons[0].text == "1900-е"
     assert decade_buttons[0].callback_data == "birth_date:decade:1900"
@@ -307,7 +301,8 @@ def test_birth_date_picker_covers_valid_range_and_calendar_days() -> None:
 
 def test_birth_time_picker_uses_hour_range_and_exact_minute_buttons() -> None:
     prompt, hours = _birth_time_picker({"time_precision": "exact"})
-    assert prompt.startswith("🕐 Во сколько ты родилась?")
+    assert prompt.startswith("🕐 Укажи время рождения.")
+    assert "его знают близкие" in prompt
     hour_buttons = [button for row in hours.inline_keyboard[:-2] for button in row]
     assert [button.text for button in hour_buttons] == [f"{hour:02d}" for hour in range(24)]
 
@@ -416,70 +411,6 @@ async def test_new_profile_button_restarts_with_consent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_paid_avatar_page_button_opens_requested_owned_page() -> None:
-    delivery = AsyncMock()
-    delivery.show_paid_avatar_page.return_value = True
-    router = build_router(
-        Settings(_env_file=None),
-        AsyncMock(),
-        AsyncMock(),
-        AvatarAssets(ASSET_DIRECTORY),
-        delivery,
-    )
-    handler = next(
-        item.callback
-        for item in router.callback_query.handlers
-        if item.callback.__name__ == "paid_avatar_page"
-    )
-    callback = AsyncMock()
-    callback.data = "avatar_page:order-1:2"
-    callback.from_user.id = 123456
-    callback.message = AsyncMock(spec=Message)
-
-    await handler(callback)
-
-    delivery.show_paid_avatar_page.assert_awaited_once_with(
-        callback.message,
-        telegram_id=123456,
-        order_id="order-1",
-        page_index=2,
-    )
-    callback.answer.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
-async def test_strength_offer_page_button_opens_requested_owned_page() -> None:
-    delivery = AsyncMock()
-    delivery.show_strength_offer_page.return_value = True
-    router = build_router(
-        Settings(_env_file=None),
-        AsyncMock(),
-        AsyncMock(),
-        AvatarAssets(ASSET_DIRECTORY),
-        delivery,
-    )
-    handler = next(
-        item.callback
-        for item in router.callback_query.handlers
-        if item.callback.__name__ == "strength_offer_page"
-    )
-    callback = AsyncMock()
-    callback.data = "strength_page:profile-1:1"
-    callback.from_user.id = 123456
-    callback.message = AsyncMock(spec=Message)
-
-    await handler(callback)
-
-    delivery.show_strength_offer_page.assert_awaited_once_with(
-        callback.message,
-        telegram_id=123456,
-        profile_id="profile-1",
-        page_index=1,
-    )
-    callback.answer.assert_awaited_once_with()
-
-
-@pytest.mark.asyncio
 async def test_consent_skips_name_and_requests_birth_date() -> None:
     callback = AsyncMock()
     callback.from_user.id = 123456
@@ -499,11 +430,11 @@ async def test_consent_skips_name_and_requests_birth_date() -> None:
     reminder = store.schedule_form_reminder.await_args
     assert reminder.args == (123456,)
     assert reminder.kwargs["state"] == "birth_date"
-    assert reminder.kwargs["text"].startswith("📅 Когда ты родилась?")
+    assert reminder.kwargs["text"].startswith("📅 Укажи дату рождения.")
     assert reminder.kwargs["buttons"][0][0][1].startswith("birth_date:decade:")
     state.set_state.assert_awaited_once_with(ProfileForm.birth_date)
     answer = callback.message.answer.await_args
-    assert answer.args[0].startswith("📅 Когда ты родилась?")
+    assert answer.args[0].startswith("📅 Укажи дату рождения.")
     assert answer.kwargs["reply_markup"].inline_keyboard
     assert all("Как тебя зовут?" not in str(call) for call in callback.mock_calls)
 
@@ -722,17 +653,26 @@ async def test_birth_date_button_saves_date_and_opens_time_precision() -> None:
     callback = AsyncMock()
     callback.data = "birth_date:day:1996:2:8"
     callback.from_user.id = 123456
-    callback.message = None
+    callback.message = AsyncMock(spec=Message)
+    callback.message.message_id = 77
+    callback.message.edit_text = AsyncMock()
     state = AsyncMock()
 
     await handler(callback, state)
 
-    state.update_data.assert_awaited_once_with(
-        birth_date="1996-02-08",
-        birth_date_step=None,
-        birth_decade=None,
-        birth_year=None,
-        birth_month=None,
+    assert (
+        call(
+            birth_date="1996-02-08",
+            birth_date_step=None,
+            birth_decade=None,
+            birth_year=None,
+            birth_month=None,
+        )
+        in state.update_data.await_args_list
+    )
+    callback.message.edit_text.assert_awaited_once()
+    assert callback.message.edit_text.await_args.args == (
+        "Насколько точно известно время рождения?",
     )
     state.set_state.assert_awaited_once_with(ProfileForm.time_precision)
     reminder = store.schedule_form_reminder.await_args
@@ -758,21 +698,247 @@ async def test_birth_time_button_saves_exact_minute_and_opens_city() -> None:
     callback = AsyncMock()
     callback.data = "birth_time:minute:23:45"
     callback.from_user.id = 123456
-    callback.message = None
+    callback.message = AsyncMock(spec=Message)
+    callback.message.message_id = 77
+    callback.message.edit_text = AsyncMock()
     state = AsyncMock()
 
     await handler(callback, state)
 
-    state.update_data.assert_awaited_once_with(
-        birth_time="23:45:00",
-        birth_time_step=None,
-        birth_hour=None,
-        birth_minute_start=None,
+    assert (
+        call(
+            birth_time="23:45:00",
+            birth_time_step=None,
+            birth_hour=None,
+            birth_minute_start=None,
+        )
+        in state.update_data.await_args_list
+    )
+    callback.message.edit_text.assert_awaited_once_with(
+        "Введи только город рождения, например: Москва. Страну писать не нужно — "
+        "если найдётся несколько городов, я покажу варианты с регионом и страной."
     )
     state.set_state.assert_awaited_once_with(ProfileForm.city)
     reminder = store.schedule_form_reminder.await_args
     assert reminder.kwargs["state"] == "city"
     assert reminder.kwargs["text"].startswith("Введи только город рождения")
+
+
+@pytest.mark.asyncio
+async def test_unknown_birth_time_replaces_question_with_city_prompt() -> None:
+    store = AsyncMock()
+    router = build_router(
+        Settings(_env_file=None),
+        store,
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "precision"
+    )
+    callback = AsyncMock()
+    callback.data = "precision:unknown"
+    callback.from_user.id = 123456
+    callback.message = AsyncMock(spec=Message)
+    callback.message.message_id = 77
+    callback.message.edit_text = AsyncMock()
+    callback.message.answer = AsyncMock()
+    state = AsyncMock()
+
+    await handler(callback, state)
+
+    callback.message.edit_text.assert_awaited_once()
+    assert callback.message.edit_text.await_args.args[0].startswith("Введи только город рождения")
+    callback.message.answer.assert_not_awaited()
+    state.set_state.assert_awaited_once_with(ProfileForm.city)
+
+
+@pytest.mark.asyncio
+async def test_city_input_replaces_prompt_and_deletes_user_message() -> None:
+    city = City(
+        geoname_id=524305,
+        name="Murmansk",
+        region="Murmansk",
+        country_code="RU",
+        country_name="Russia",
+        latitude=68.97,
+        longitude=33.07,
+        timezone="Europe/Moscow",
+    )
+    cities = AsyncMock()
+    cities.search.return_value = [city]
+    store = AsyncMock()
+    store.form_reminder_message_id.return_value = 88
+    router = build_router(
+        Settings(_env_file=None),
+        store,
+        cities,
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback for item in router.message.handlers if item.callback.__name__ == "city"
+    )
+    bot = AsyncMock()
+    message = AsyncMock()
+    message.text = "Мурманск"
+    message.from_user.id = 123456
+    message.chat.id = 123456
+    message.bot = bot
+    state = AsyncMock()
+    state.get_data.return_value = {"form_prompt_message_id": 88}
+
+    await handler(message, state)
+
+    bot.edit_message_text.assert_awaited_once()
+    kwargs = bot.edit_message_text.await_args.kwargs
+    assert kwargs["message_id"] == 88
+    assert kwargs["text"] == "Выбери подходящий вариант:"
+    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "city:0"
+    message.delete.assert_awaited_once_with()
+    message.answer.assert_not_awaited()
+    state.set_state.assert_awaited_once_with(ProfileForm.city_choice)
+    store.form_reminder_message_id.assert_awaited_once_with(123456)
+    assert call({"form_prompt_message_id": 88}) in state.update_data.await_args_list
+
+
+@pytest.mark.asyncio
+async def test_city_choice_replaces_options_with_confirmation() -> None:
+    selected = {
+        "geoname_id": 524305,
+        "name": "Murmansk",
+        "region": "Murmansk",
+        "country_code": "RU",
+        "country_name": "Russia",
+        "latitude": 68.97,
+        "longitude": 33.07,
+        "timezone": "Europe/Moscow",
+    }
+    store = AsyncMock()
+    router = build_router(
+        Settings(_env_file=None),
+        store,
+        AsyncMock(),
+        AsyncMock(),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "city_choice"
+    )
+    callback = AsyncMock()
+    callback.data = "city:0"
+    callback.from_user.id = 123456
+    callback.message = AsyncMock(spec=Message)
+    callback.message.message_id = 77
+    callback.message.edit_text = AsyncMock()
+    callback.message.answer = AsyncMock()
+    state = AsyncMock()
+    state.get_data.return_value = {
+        "birth_date": "1996-02-08",
+        "birth_time": None,
+        "time_precision": "unknown",
+        "city_options": [selected],
+    }
+
+    await handler(callback, state)
+
+    callback.message.edit_text.assert_awaited_once()
+    assert callback.message.edit_text.await_args.args[0].startswith("Проверь данные:")
+    callback.message.answer.assert_not_awaited()
+    state.set_state.assert_awaited_once_with(ProfileForm.confirm)
+
+
+@pytest.mark.asyncio
+async def test_fill_again_restarts_at_birth_date_in_same_message() -> None:
+    store = AsyncMock()
+    router = build_router(
+        Settings(_env_file=None),
+        store,
+        AsyncMock(),
+        AvatarAssets(ASSET_DIRECTORY),
+        AsyncMock(),
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "form_restart"
+    )
+    callback = AsyncMock()
+    callback.data = "form:restart"
+    callback.from_user.id = 123456
+    callback.message = AsyncMock(spec=Message)
+    callback.message.message_id = 77
+    callback.message.edit_text = AsyncMock()
+    callback.message.answer_photo = AsyncMock()
+    state = AsyncMock()
+
+    await handler(callback, state)
+
+    state.clear.assert_awaited_once_with()
+    state.set_state.assert_awaited_once_with(ProfileForm.birth_date)
+    callback.message.edit_text.assert_awaited_once()
+    assert callback.message.edit_text.await_args.args[0].startswith("📅 Укажи дату рождения.")
+    callback.message.answer_photo.assert_not_awaited()
+    assert store.schedule_form_reminder.await_args.kwargs["state"] == "birth_date"
+
+
+@pytest.mark.asyncio
+async def test_successful_calculation_deletes_form_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = SimpleNamespace(money_type="Навигатор")
+    monkeypatch.setattr(router_module, "calculate_chart", lambda _birth: SimpleNamespace())
+    monkeypatch.setattr(router_module, "generate_profile", lambda _facts: result)
+    monkeypatch.setattr(router_module, "validate_generated_profile", lambda _result: [])
+    store = AsyncMock()
+    store.save_calculation.return_value = "profile-1"
+    delivery = AsyncMock()
+    delivery.notify = MagicMock()
+    router = build_router(
+        Settings(_env_file=None),
+        store,
+        AsyncMock(),
+        AvatarAssets(ASSET_DIRECTORY),
+        delivery,
+    )
+    handler = next(
+        item.callback
+        for item in router.callback_query.handlers
+        if item.callback.__name__ == "form_confirm"
+    )
+    callback = AsyncMock()
+    callback.from_user.id = 123456
+    callback.message = AsyncMock(spec=Message)
+    callback.message.delete = AsyncMock()
+    callback.message.answer_photo = AsyncMock()
+    state = AsyncMock()
+    state.get_data.return_value = {
+        "birth_date": "1996-02-08",
+        "birth_time": None,
+        "time_precision": "unknown",
+        "city": {
+            "geoname_id": 524305,
+            "name": "Murmansk",
+            "region": "Murmansk",
+            "country_code": "RU",
+            "country_name": "Russia",
+            "latitude": 68.97,
+            "longitude": 33.07,
+            "timezone": "Europe/Moscow",
+        },
+    }
+
+    await handler(callback, state)
+
+    callback.message.delete.assert_awaited_once_with()
+    callback.message.answer_photo.assert_awaited_once()
+    state.clear.assert_awaited_once_with()
+    delivery.notify.assert_called_once_with()
 
 
 @pytest.mark.asyncio

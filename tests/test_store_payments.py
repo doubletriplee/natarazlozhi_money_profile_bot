@@ -724,6 +724,7 @@ async def test_form_reminder_is_replaced_and_sent_only_once_after_one_hour(
     )
     assert await service.pending_form_reminder_ids() == []
     assert await service.form_reminder_context(reminder.id) is None
+    assert await service.form_reminder_message_id(10001) == 77
 
     async with database.sessions() as session:
         sent = await session.get(FormReminder, reminder.id)

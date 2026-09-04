@@ -47,12 +47,13 @@ CONSENT_BUTTON_TEXT = "✅ Согласен(а), продолжить"
 CONSENT_REMINDER_PROMPT = (
     "Нажми «Согласен(а), продолжить», чтобы подтвердить согласие и перейти к анкете."
 )
-BIRTH_DATE_PROMPT = "📅 Когда ты родилась?\nВыбери дату кнопками. Сначала выбери десятилетие."
+BIRTH_DATE_PROMPT = "📅 Укажи дату рождения.\nВыбери дату кнопками. Сначала выбери десятилетие."
 TIME_PRECISION_PROMPT = "Насколько точно известно время рождения?"
 CITY_PROMPT = (
     "Введи только город рождения, например: Москва. Страну писать не нужно — "
     "если найдётся несколько городов, я покажу варианты с регионом и страной."
 )
+FORM_PROMPT_MESSAGE_ID_KEY = "form_prompt_message_id"
 
 MONTH_SHORT_NAMES = (
     "",
@@ -68,21 +69,6 @@ MONTH_SHORT_NAMES = (
     "окт",
     "ноя",
     "дек",
-)
-MONTH_GENITIVE_NAMES = (
-    "",
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
 )
 CANCEL_BUTTON = ("✖ Отменить", "form:cancel")
 
@@ -248,8 +234,8 @@ def _birth_time_picker(data: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]
 
     buttons = [(f"{hour:02d}", f"birth_time:hour:{hour}") for hour in range(24)]
     return (
-        "🕐 Во сколько ты родилась? Выбери час.\n"
-        "Точное время может быть на бирке из роддома или его знает мама."
+        "🕐 Укажи время рождения. Выбери час.\n"
+        "Точное время может быть на бирке из роддома или его знают близкие."
         f"{warning}",
         _grid_keyboard(
             buttons,
@@ -289,6 +275,44 @@ async def _schedule_form_reminder(
         text=text,
         buttons=_reminder_buttons(reply_markup),
     )
+
+
+async def _remember_form_prompt(state: FSMContext, message: Message | None) -> None:
+    if isinstance(message, Message):
+        await state.update_data({FORM_PROMPT_MESSAGE_ID_KEY: message.message_id})
+
+
+async def _delete_message_safely(message: Message) -> None:
+    with suppress(TelegramAPIError, RuntimeError):
+        await message.delete()
+
+
+async def _replace_form_prompt_from_input(
+    message: Message,
+    state: FSMContext,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    data = await state.get_data()
+    prompt_message_id = data.get(FORM_PROMPT_MESSAGE_ID_KEY)
+    replaced = False
+    bot = message.bot
+    if isinstance(prompt_message_id, int) and bot is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=prompt_message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            replaced = True
+        except (TelegramAPIError, RuntimeError):
+            pass
+    if not replaced:
+        sent = await message.answer(text, reply_markup=reply_markup)
+        await _remember_form_prompt(state, sent)
+    await _delete_message_safely(message)
 
 
 def _city_label(city: City) -> str:
@@ -539,7 +563,8 @@ async def _accept_consent(
             text=prompt,
             reply_markup=keyboard,
         )
-        await callback.message.answer(prompt, reply_markup=keyboard)
+        sent = await callback.message.answer(prompt, reply_markup=keyboard)
+        await _remember_form_prompt(state, sent)
 
 
 async def _request_data_deletion(message: Message, state: FSMContext) -> None:
@@ -619,7 +644,9 @@ def build_router(
                 text=prompt,
                 reply_markup=keyboard,
             )
-        await message.answer(prompt, reply_markup=keyboard)
+        sent = await message.answer(prompt, reply_markup=keyboard)
+        await _remember_form_prompt(state, sent)
+        await _delete_message_safely(message)
 
     @router.callback_query(ProfileForm.birth_date, F.data == "form:cancel")
     @router.callback_query(ProfileForm.time_precision, F.data == "form:cancel")
@@ -645,7 +672,9 @@ def build_router(
                 text=prompt,
                 reply_markup=keyboard,
             )
-        await message.answer(
+        await _replace_form_prompt_from_input(
+            message,
+            state,
             "Дату не нужно вводить вручную — выбери её кнопками ниже.\n\n" + prompt,
             reply_markup=keyboard,
         )
@@ -711,11 +740,11 @@ def build_router(
                 )
                 await callback.answer()
                 if isinstance(callback.message, Message):
-                    selected_date = f"{day} {MONTH_GENITIVE_NAMES[month]} {year}"
                     await callback.message.edit_text(
-                        f"📅 Дата рождения: {selected_date}\n\n{TIME_PRECISION_PROMPT}",
+                        TIME_PRECISION_PROMPT,
                         reply_markup=keyboard,
                     )
+                    await _remember_form_prompt(state, callback.message)
                 return
             elif action == "back" and parts[2] == "decades":
                 await state.update_data(
@@ -758,6 +787,7 @@ def build_router(
         await callback.answer()
         if isinstance(callback.message, Message):
             await callback.message.edit_text(prompt, reply_markup=keyboard)
+            await _remember_form_prompt(state, callback.message)
 
     @router.callback_query(ProfileForm.time_precision, F.data.startswith("precision:"))
     async def precision(callback: CallbackQuery, state: FSMContext) -> None:
@@ -785,8 +815,8 @@ def build_router(
                 text=CITY_PROMPT,
             )
             if isinstance(callback.message, Message):
-                await callback.message.edit_text("🕐 Время рождения: не указано")
-                await callback.message.answer(CITY_PROMPT)
+                await callback.message.edit_text(CITY_PROMPT)
+                await _remember_form_prompt(state, callback.message)
         else:
             await state.update_data(
                 birth_time_step="hour",
@@ -805,6 +835,7 @@ def build_router(
             )
             if isinstance(callback.message, Message):
                 await callback.message.edit_text(prompt, reply_markup=keyboard)
+                await _remember_form_prompt(state, callback.message)
 
     @router.message(ProfileForm.birth_time)
     async def birth_time(message: Message, state: FSMContext) -> None:
@@ -818,7 +849,9 @@ def build_router(
                 text=prompt,
                 reply_markup=keyboard,
             )
-        await message.answer(
+        await _replace_form_prompt_from_input(
+            message,
+            state,
             "Время не нужно вводить вручную — выбери его кнопками ниже.\n\n" + prompt,
             reply_markup=keyboard,
         )
@@ -864,8 +897,8 @@ def build_router(
                 )
                 await callback.answer()
                 if isinstance(callback.message, Message):
-                    await callback.message.edit_text(f"🕐 Время рождения: {hour:02d}:{minute:02d}")
-                    await callback.message.answer(CITY_PROMPT)
+                    await callback.message.edit_text(CITY_PROMPT)
+                    await _remember_form_prompt(state, callback.message)
                 return
             elif action == "back" and parts[2] == "precision":
                 await state.set_state(ProfileForm.time_precision)
@@ -883,6 +916,7 @@ def build_router(
                         TIME_PRECISION_PROMPT,
                         reply_markup=keyboard,
                     )
+                    await _remember_form_prompt(state, callback.message)
                 return
             elif action == "back" and parts[2] == "hours":
                 await state.update_data(
@@ -917,10 +951,15 @@ def build_router(
         await callback.answer()
         if isinstance(callback.message, Message):
             await callback.message.edit_text(prompt, reply_markup=keyboard)
+            await _remember_form_prompt(state, callback.message)
 
     @router.message(ProfileForm.city)
     async def city(message: Message, state: FSMContext) -> None:
         query = (message.text or "").strip()
+        if message.from_user:
+            reminder_message_id = await store.form_reminder_message_id(message.from_user.id)
+            if isinstance(reminder_message_id, int):
+                await state.update_data({FORM_PROMPT_MESSAGE_ID_KEY: reminder_message_id})
         if len(query) > 120:
             if message.from_user:
                 await _schedule_form_reminder(
@@ -929,7 +968,11 @@ def build_router(
                     state="city",
                     text=CITY_PROMPT,
                 )
-            await message.answer("Название города слишком длинное. Введи только город.")
+            await _replace_form_prompt_from_input(
+                message,
+                state,
+                "Название города слишком длинное. Введи только город.",
+            )
             return
         variants = await cities.search(query)
         if not variants:
@@ -940,9 +983,11 @@ def build_router(
                     state="city",
                     text=CITY_PROMPT,
                 )
-            await message.answer(
+            await _replace_form_prompt_from_input(
+                message,
+                state,
                 "Не получилось найти город. Введи только его название без страны, например: "
-                f"Москва. Можно указать ближайший крупный город или написать @{settings.support_username}."
+                f"Москва. Можно указать ближайший крупный город или написать @{settings.support_username}.",
             )
             return
         await state.update_data(city_options=[asdict(item) for item in variants])
@@ -961,7 +1006,12 @@ def build_router(
                 text="Выбери подходящий вариант:",
                 reply_markup=keyboard,
             )
-        await message.answer("Выбери подходящий вариант:", reply_markup=keyboard)
+        await _replace_form_prompt_from_input(
+            message,
+            state,
+            "Выбери подходящий вариант:",
+            reply_markup=keyboard,
+        )
 
     @router.callback_query(ProfileForm.city_choice, F.data.startswith("city:"))
     async def city_choice(callback: CallbackQuery, state: FSMContext) -> None:
@@ -978,15 +1028,16 @@ def build_router(
                 state="city",
                 text=CITY_PROMPT,
             )
-            if callback.message:
-                await callback.message.answer(CITY_PROMPT)
+            if isinstance(callback.message, Message):
+                await callback.message.edit_text(CITY_PROMPT)
+                await _remember_form_prompt(state, callback.message)
             return
         await state.update_data(city=selected)
         await state.set_state(ProfileForm.confirm)
         await callback.answer()
         data = await state.get_data()
         summary = _confirmation_text(data, selected)
-        if callback.message:
+        if isinstance(callback.message, Message):
             keyboard = _keyboard(
                 ("Всё верно", "form:confirm"), ("Заполнить заново", "form:restart")
             )
@@ -997,24 +1048,37 @@ def build_router(
                 text=summary,
                 reply_markup=keyboard,
             )
-            await callback.message.answer(
+            await callback.message.edit_text(
                 summary,
                 reply_markup=keyboard,
             )
+            await _remember_form_prompt(state, callback.message)
 
     @router.callback_query(ProfileForm.confirm, F.data == "form:restart")
     async def form_restart(callback: CallbackQuery, state: FSMContext) -> None:
-        await callback.answer()
+        if not isinstance(callback.message, Message):
+            await callback.answer("Не получилось открыть анкету. Отправь /start.", show_alert=True)
+            return
         await store.cancel_form_reminder(callback.from_user.id)
-        if isinstance(callback.message, Message):
-            await _schedule_form_reminder(
-                store,
-                callback.from_user.id,
-                state="consent",
-                text=CONSENT_REMINDER_PROMPT,
-                reply_markup=_intro_keyboard(settings),
-            )
-            await _begin(callback.message, state, settings, avatars)
+        await state.clear()
+        await state.update_data(
+            birth_date_step="decade",
+            birth_decade=None,
+            birth_year=None,
+            birth_month=None,
+        )
+        await state.set_state(ProfileForm.birth_date)
+        prompt, keyboard = _birth_date_picker({})
+        await _schedule_form_reminder(
+            store,
+            callback.from_user.id,
+            state="birth_date",
+            text=prompt,
+            reply_markup=keyboard,
+        )
+        await callback.answer("Заполним заново")
+        await callback.message.edit_text(prompt, reply_markup=keyboard)
+        await _remember_form_prompt(state, callback.message)
 
     @router.callback_query(ProfileForm.confirm, F.data == "form:confirm")
     async def form_confirm(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1060,6 +1124,7 @@ def build_router(
         await store.cancel_form_reminder(callback.from_user.id)
         await store.record_event(callback.from_user.id, "profile_calculated")
         await store.schedule_strength_offer(profile_id)
+        await _delete_message_safely(callback.message)
         await _send_free_avatar(
             callback.message,
             profile_id=profile_id,
@@ -1083,32 +1148,6 @@ def build_router(
                 "Эта кнопка уже неактивна. Для нового аватара отправь /start.",
                 show_alert=True,
             )
-
-    @router.callback_query(F.data.startswith("strength_page:"))
-    async def strength_offer_page(callback: CallbackQuery) -> None:
-        if not isinstance(callback.message, Message):
-            await callback.answer("Страница недоступна.", show_alert=True)
-            return
-        try:
-            _, profile_id, raw_page_index = (callback.data or "").split(":", maxsplit=2)
-            page_index = int(raw_page_index)
-        except ValueError:
-            await callback.answer(
-                "Кнопка устарела. Открой результат через /profile.", show_alert=True
-            )
-            return
-        shown = await delivery.show_strength_offer_page(
-            callback.message,
-            telegram_id=callback.from_user.id,
-            profile_id=profile_id,
-            page_index=page_index,
-        )
-        if not shown:
-            await callback.answer(
-                "Кнопка устарела. Открой результат через /profile.", show_alert=True
-            )
-            return
-        await callback.answer()
 
     @router.callback_query(F.data.startswith("buy:"))
     async def buy(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1239,28 +1278,6 @@ def build_router(
             return
         await callback.answer("Полный разбор уже ниже")
         await delivery.deliver(order_id)
-
-    @router.callback_query(F.data.startswith("avatar_page:"))
-    async def paid_avatar_page(callback: CallbackQuery) -> None:
-        if not isinstance(callback.message, Message):
-            await callback.answer("Страница разбора недоступна.", show_alert=True)
-            return
-        try:
-            _, order_id, raw_page_index = (callback.data or "").split(":", maxsplit=2)
-            page_index = int(raw_page_index)
-        except ValueError:
-            await callback.answer("Кнопка устарела. Открой разбор через /profile.", show_alert=True)
-            return
-        shown = await delivery.show_paid_avatar_page(
-            callback.message,
-            telegram_id=callback.from_user.id,
-            order_id=order_id,
-            page_index=page_index,
-        )
-        if not shown:
-            await callback.answer("Кнопка устарела. Открой разбор через /profile.", show_alert=True)
-            return
-        await callback.answer()
 
     @router.callback_query(F.data == "profile:new")
     async def new_profile(callback: CallbackQuery, state: FSMContext) -> None:
