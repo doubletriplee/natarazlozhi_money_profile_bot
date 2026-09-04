@@ -42,5 +42,6 @@ CI заново строит каждую карту локальной Swiss Ep
 - Изображение: [`avatar_storyteller.png`](../assets/avatars/avatar_storyteller.png).
 
 Машиночитаемые входы, ожидаемые значения и контрольные суммы находятся в
-[`tests/fixtures/golden_cards.json`](../tests/fixtures/golden_cards.json). Флаг
-`GOLDEN_CARDS_APPROVED` остаётся выключенным до явного подтверждения владельцем этих трёх эталонов.
+[`tests/fixtures/golden_cards.json`](../tests/fixtures/golden_cards.json). 4 сентября 2026 года
+владелец явно подтвердил эти три эталона. Флаг `GOLDEN_CARDS_APPROVED=true` устанавливается только
+защищённым переходом из pilot в production и не включает создание реальных счетов.
