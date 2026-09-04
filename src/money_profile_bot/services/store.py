@@ -1314,27 +1314,22 @@ class Store:
             return len(payment_ids)
 
     async def cleanup_expired_test_payments(self, older_than: datetime) -> int:
-        """Remove test payment rows after their short operational retention period."""
+        """Remove complete test payment journals after their short retention period."""
         async with self.sessions() as session, session.begin():
-            payment_ids = list(
+            payments = list(
                 (
-                    await session.scalars(
-                        select(Payment.id).where(Payment.received_at < older_than)
-                    )
+                    await session.scalars(select(Payment).where(Payment.received_at < older_than))
                 ).all()
             )
-            if not payment_ids:
-                return 0
-            await session.execute(delete(Payment).where(Payment.id.in_(payment_ids)))
-            return len(payment_ids)
+            return await self._delete_payment_journals(session, payments)
 
     async def cleanup_expired_anonymized_payment_records(self, older_than: datetime) -> int:
         """Remove an old real-payment journal only after the related profile was deleted."""
         async with self.sessions() as session, session.begin():
-            payment_ids = list(
+            payments = list(
                 (
                     await session.scalars(
-                        select(Payment.id)
+                        select(Payment)
                         .join(Order, Payment.order_id == Order.id)
                         .join(Profile, Order.profile_id == Profile.id)
                         .where(
@@ -1348,10 +1343,21 @@ class Store:
                     )
                 ).all()
             )
-            if not payment_ids:
-                return 0
-            await session.execute(delete(Payment).where(Payment.id.in_(payment_ids)))
-            return len(payment_ids)
+            return await self._delete_payment_journals(session, payments)
+
+    @staticmethod
+    async def _delete_payment_journals(
+        session: AsyncSession,
+        payments: list[Payment],
+    ) -> int:
+        if not payments:
+            return 0
+        payment_ids = [payment.id for payment in payments]
+        order_ids = [payment.order_id for payment in payments]
+        await session.execute(delete(DeliveryItem).where(DeliveryItem.order_id.in_(order_ids)))
+        await session.execute(delete(Payment).where(Payment.id.in_(payment_ids)))
+        await session.execute(delete(Order).where(Order.id.in_(order_ids)))
+        return len(payments)
 
     async def cleanup_expired_unpaid_orders(self, older_than: datetime) -> int:
         """Scrub contact data and payment links from stale orders without a payment."""

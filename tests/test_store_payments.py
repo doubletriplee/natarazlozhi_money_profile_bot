@@ -330,6 +330,8 @@ async def test_expired_payment_contacts_are_scrubbed_before_test_journal_is_remo
     assert await service.cleanup_expired_test_payments(cutoff) == 0
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Payment)) == 0
+        assert await session.scalar(select(func.count()).select_from(Order)) == 0
+        assert await session.scalar(select(func.count()).select_from(DeliveryItem)) == 0
 
 
 @pytest.mark.asyncio
@@ -354,6 +356,8 @@ async def test_old_real_payment_is_removed_only_after_personal_data_deletion(
 
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Payment)) == 0
+        assert await session.scalar(select(func.count()).select_from(Order)) == 0
+        assert await session.scalar(select(func.count()).select_from(DeliveryItem)) == 0
 
 
 @pytest.mark.asyncio
@@ -381,6 +385,8 @@ async def test_unresolved_refund_is_not_removed_after_record_retention_period(
     assert await service.cleanup_expired_anonymized_payment_records(cutoff) == 0
     async with database.sessions() as session:
         assert await session.scalar(select(func.count()).select_from(Payment)) == 1
+        assert await session.scalar(select(func.count()).select_from(Order)) == 1
+        assert await session.scalar(select(func.count()).select_from(DeliveryItem)) == 2
         payment = await session.scalar(select(Payment).where(Payment.order_id == order_id))
         assert payment is not None
         assert payment.provider_operation_encrypted == "encrypted-operation"
