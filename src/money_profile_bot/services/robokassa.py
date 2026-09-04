@@ -4,19 +4,21 @@ import base64
 import hashlib
 import hmac
 import json
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, cast
 
 import aiohttp
+from defusedxml import ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 from money_profile_bot.config import Settings
 
 INVOICE_API = "https://services.robokassa.ru/InvoiceServiceWebApi/api"
 REFUND_API = "https://services.robokassa.ru/RefundService/Refund"
 OP_STATE_URL = "https://auth.robokassa.ru/Merchant/WebService/Service.asmx/OpStateExt"
+MAX_PROVIDER_RESPONSE_BYTES = 64 * 1024
 
 
 class RobokassaError(RuntimeError):
@@ -56,6 +58,16 @@ def _amount_rub(amount_minor: int) -> Decimal:
 
 def _minor(value: str | Decimal | float) -> int:
     return int((Decimal(str(value)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+async def _read_provider_response(response: aiohttp.ClientResponse) -> bytes:
+    content_length = response.content_length
+    if content_length is not None and content_length > MAX_PROVIDER_RESPONSE_BYTES:
+        raise RobokassaTransportError("Robokassa response is too large")
+    body = await response.content.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+    if len(body) > MAX_PROVIDER_RESPONSE_BYTES:
+        raise RobokassaTransportError("Robokassa response is too large")
+    return body
 
 
 class RobokassaClient:
@@ -102,7 +114,7 @@ class RobokassaClient:
                 endpoint, json=token, timeout=aiohttp.ClientTimeout(total=20)
             ) as response:
                 status = response.status
-                body = await response.text()
+                body = await _read_provider_response(response)
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise RobokassaTransportError("Robokassa request failed") from exc
         if 400 <= status < 500:
@@ -223,16 +235,17 @@ class RobokassaClient:
             async with self.session.get(
                 OP_STATE_URL, params=params, timeout=aiohttp.ClientTimeout(total=20)
             ) as response:
-                body = await response.text()
+                status = response.status
+                body = await _read_provider_response(response)
         except (aiohttp.ClientError, TimeoutError) as exc:
             raise RobokassaTransportError("cannot query operation state") from exc
-        if response.status >= 400:
-            raise RobokassaTransportError(f"operation state returned HTTP status {response.status}")
+        if status >= 400:
+            raise RobokassaTransportError(f"operation state returned HTTP status {status}")
         try:
             root = ET.fromstring(body)
             namespace = {"r": "http://merchant.roboxchange.com/WebService/"}
             code = int(root.findtext("r:Result/r:Code", default="1000", namespaces=namespace))
-        except (ET.ParseError, ValueError) as exc:
+        except (ET.ParseError, DefusedXmlException, ValueError) as exc:
             raise RobokassaTransportError("invalid operation state response") from exc
         if code != 0:
             raise RobokassaError(f"OpStateExt returned code {code}")
@@ -288,13 +301,15 @@ class RobokassaClient:
                 params={"id": request_id},
                 timeout=aiohttp.ClientTimeout(total=20),
             ) as response:
-                data = await response.json(content_type=None)
+                status = response.status
+                body = await _read_provider_response(response)
+                data = json.loads(body)
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             raise RobokassaTransportError("cannot query refund state") from exc
         if not isinstance(data, dict):
             raise RobokassaTransportError("invalid refund state response")
-        if response.status >= 500:
-            raise RobokassaTransportError(f"refund state returned HTTP status {response.status}")
-        if response.status >= 400 or "label" not in data:
+        if status >= 500:
+            raise RobokassaTransportError(f"refund state returned HTTP status {status}")
+        if status >= 400 or "label" not in data:
             raise RobokassaError(str(data.get("message") or "invalid refund state response"))
         return str(data["label"])

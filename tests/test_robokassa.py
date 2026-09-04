@@ -21,10 +21,16 @@ from money_profile_bot.services.robokassa import (
 class FakeResponse:
     def __init__(self, status: int, body: str) -> None:
         self.status = status
+        self.content = FakeContent(body.encode())
+        self.content_length = len(body.encode())
+
+
+class FakeContent:
+    def __init__(self, body: bytes) -> None:
         self.body = body
 
-    async def text(self) -> str:
-        return self.body
+    async def read(self, size: int = -1) -> bytes:
+        return self.body if size < 0 else self.body[:size]
 
 
 class FakeRequest:
@@ -43,6 +49,9 @@ class FakeSession:
         self.response = response
 
     def post(self, *_: object, **__: object) -> FakeRequest:
+        return FakeRequest(self.response)
+
+    def get(self, *_: object, **__: object) -> FakeRequest:
         return FakeRequest(self.response)
 
 
@@ -121,6 +130,49 @@ async def test_post_jwt_marks_ambiguous_provider_response_as_uncertain(
 
     with pytest.raises(RobokassaTransportError):
         await robokassa._post_jwt("https://example.test", {}, "pass3", refund=True)
+
+
+@pytest.mark.asyncio
+async def test_provider_response_size_is_limited() -> None:
+    robokassa = response_client(200, "x" * (64 * 1024 + 1))
+
+    with pytest.raises(RobokassaTransportError, match="too large"):
+        await robokassa._post_jwt("https://example.test", {}, "pass3", refund=True)
+
+
+@pytest.mark.asyncio
+async def test_operation_state_rejects_xml_entities() -> None:
+    body = """<?xml version="1.0"?>
+<!DOCTYPE OperationStateResponse [<!ENTITY blocked "0">]>
+<OperationStateResponse xmlns="http://merchant.roboxchange.com/WebService/">
+  <Result><Code>&blocked;</Code></Result>
+</OperationStateResponse>"""
+    robokassa = response_client(200, body)
+
+    with pytest.raises(RobokassaTransportError, match="invalid operation state response"):
+        await robokassa.operation_state(42)
+
+
+@pytest.mark.asyncio
+async def test_operation_state_accepts_expected_xml() -> None:
+    body = """<?xml version="1.0"?>
+<OperationStateResponse xmlns="http://merchant.roboxchange.com/WebService/">
+  <Result><Code>0</Code></Result>
+  <State><Code>100</Code></State>
+  <Info>
+    <OpKey>operation-key</OpKey>
+    <OutSum>149.00</OutSum>
+    <PaymentMethod><Code>BankCard</Code></PaymentMethod>
+  </Info>
+</OperationStateResponse>"""
+    robokassa = response_client(200, body)
+
+    state = await robokassa.operation_state(42)
+
+    assert state.state_code == 100
+    assert state.operation_key == "operation-key"
+    assert state.amount_minor == 14900
+    assert state.payment_method == "BankCard"
 
 
 @pytest.mark.asyncio

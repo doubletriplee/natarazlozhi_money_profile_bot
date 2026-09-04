@@ -5,7 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip wheel --no-cache-dir --wheel-dir /wheels .
+RUN python -m pip install --no-cache-dir --upgrade "pip>=26.2,<27" \
+    && python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
 FROM python:3.11-slim
 
@@ -15,7 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --no-create-home --home-dir /app app
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/* && rm -rf /wheels
+RUN python -m pip install --no-cache-dir --upgrade "pip>=26.2,<27" \
+    && python -m pip install --no-cache-dir --no-index --find-links=/wheels \
+      natarazlozhi-money-profile-bot \
+    && python -m pip uninstall -y pip setuptools wheel \
+    && rm -rf /wheels
 WORKDIR /app
 COPY --chown=app:app . .
 RUN mkdir -p /data/cards && chown -R app:app /data
