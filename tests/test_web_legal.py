@@ -362,7 +362,7 @@ async def test_robokassa_exposes_only_classic_post_result_callback() -> None:
         (False, "/payments/robokassa/success?OutSum=149.00&InvId=123"),
     ),
 )
-async def test_success_return_only_redirects_and_never_authorizes_delivery(
+async def test_success_return_page_opens_telegram_and_never_authorizes_delivery(
     test_mode: bool, path: str
 ) -> None:
     settings = Settings(
@@ -381,8 +381,14 @@ async def test_success_return_only_redirects_and_never_authorizes_delivery(
     )
 
     async with TestClient(TestServer(app)) as client:
-        response = await client.get(path, allow_redirects=False)
+        response = await client.get(path)
+        body = await response.text()
 
-    assert response.status == 302
-    assert response.headers["Location"] == "https://t.me/money_profile_bot"
+    assert response.status == 200
+    assert '<meta http-equiv="refresh" content="0;url=https://t.me/money_profile_bot">' in body
+    assert '<a class="return-button" href="https://t.me/money_profile_bot">' in body
+    assert "Открыть разбор в Telegram" in body
+    assert "Окно Robokassa после этого можно закрыть" in body
+    assert "Location" not in response.headers
+    assert "<script" not in body
     store.accept_payment_callback.assert_not_awaited()

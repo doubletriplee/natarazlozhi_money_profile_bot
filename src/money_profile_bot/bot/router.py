@@ -442,7 +442,10 @@ def _payment_link_message(settings: Settings, link: OrderLink) -> tuple[str, Inl
         button_text = "Перейти к тестовой оплате"
     else:
         title = "<b>Счёт Robokassa готов</b>"
-        notice = "Результат будет отправлен после подтверждения платежа."
+        notice = (
+            "После оплаты мы сразу попробуем открыть Telegram. Разбор придёт в этот чат, когда "
+            "Robokassa подтвердит платёж. Если чат не откроется, закрой окно Robokassa и вернись сюда."
+        )
         button_text = f"Оплатить {settings.product_price_rub:.0f} ₽"
     text = (
         f"{title}\n\nСумма: {settings.product_price_rub:.2f} ₽\n"

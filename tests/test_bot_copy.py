@@ -235,6 +235,13 @@ def test_robokassa_email_and_payment_copy_are_explicit() -> None:
     assert "Деньги не списываются" in text
     assert keyboard.inline_keyboard[0][0].url == "https://pay.example/order-1"
 
+    production_text, _ = _payment_link_message(
+        production_settings,
+        OrderLink("order-1", "MP-12345678", "https://pay.example/order-1", False),
+    )
+    assert "сразу попробуем открыть Telegram" in production_text
+    assert "Если чат не откроется, закрой окно Robokassa и вернись сюда" in production_text
+
 
 def test_birth_date_validation_has_no_adult_age_gate() -> None:
     today = date(2026, 8, 29)

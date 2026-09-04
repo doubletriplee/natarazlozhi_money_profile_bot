@@ -33,16 +33,20 @@ color:var(--text); font:16px/1.55 Inter,Arial,sans-serif }
 """
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, *, head: str = "") -> str:
     return f"""<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>{html.escape(title)}</title><style>
+<title>{html.escape(title)}</title>{head}<style>
 {_SITE_STYLE}main {{ max-width:760px; margin:48px auto;
 padding:48px; background:var(--surface); border:1px solid var(--border); border-radius:48px }}
 h1,h2 {{ font-family:"Liberation Serif",Georgia,serif; letter-spacing:-.025em; line-height:1.08 }}
 h1 {{ font-size:clamp(42px,8vw,72px); margin:0 0 32px }} h2 {{ margin-top:40px }} p,li {{ color:#d0d0d0 }}
-a {{ color:var(--accent) }} .meta {{ color:var(--muted); font-size:14px }} @media(max-width:700px) {{
-main {{ margin:16px; padding:28px 24px; border-radius:24px }} }}
+a {{ color:var(--accent) }} .meta {{ color:var(--muted); font-size:14px }}
+.return-button {{ display:inline-flex; align-items:center; justify-content:center; min-height:56px;
+padding:14px 24px; border-radius:16px; background:var(--accent); color:#111; font-weight:700;
+text-align:center; text-decoration:none }} .return-button:focus-visible {{ outline:3px solid #fff;
+outline-offset:4px }} @media(max-width:700px) {{
+main {{ margin:16px; padding:28px 24px; border-radius:24px }} .return-button {{ width:100% }} }}
 </style></head><body><main><h1>{html.escape(title)}</h1>{body}</main></body></html>"""
 
 
@@ -289,7 +293,16 @@ def create_web_app(
         return web.Response(text=f"OK{invoice_id}", content_type="text/plain")
 
     async def payment_success(_: web.Request) -> web.Response:
-        raise web.HTTPFound(location=f"https://t.me/{settings.bot_username}")
+        bot_url = f"https://t.me/{html.escape(settings.bot_username, quote=True)}"
+        head = f'<meta http-equiv="refresh" content="0;url={bot_url}">'
+        body = f"""<p>Разбор появится в Telegram после подтверждения платежа Robokassa.</p>
+<p>Сейчас откроем чат с ботом. Если Telegram не открылся автоматически, нажмите кнопку:</p>
+<p><a class="return-button" href="{bot_url}">Открыть разбор в Telegram</a></p>
+<p class="meta">Окно Robokassa после этого можно закрыть.</p>"""
+        return web.Response(
+            text=_page("Вернуться за разбором", body, head=head),
+            content_type="text/html",
+        )
 
     async def payment_fail(_: web.Request) -> web.Response:
         body = f"""<p>Robokassa не подтвердила оплату. Деньги не должны быть списаны.</p>
