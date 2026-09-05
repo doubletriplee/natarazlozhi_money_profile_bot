@@ -135,7 +135,7 @@ async def test_real_router_flow_produces_unique_people_funnel(tmp_path: Path, mo
         await send("/myid")
         assert "Telegram ID: <code>100</code>" in session.sent[-1].text
         await send("/stats")
-        assert "Общая воронка" in session.sent[-1].text
+        assert "Воронка с полной историей" in session.sent[-1].text
         session.sent.append(prior_prompt)
         await click("birth_date:year:1990")
         await click("birth_date:month:1990:1")

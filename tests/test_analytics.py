@@ -23,9 +23,24 @@ from money_profile_bot.bot.stats import register_stats
 from money_profile_bot.config import Settings
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
-from money_profile_bot.models import Journey, JourneyEvent, Order, Payment, Profile, utcnow
+from money_profile_bot.models import (
+    DeliveryItem,
+    Event,
+    Journey,
+    JourneyEvent,
+    Order,
+    Payment,
+    PaymentNotification,
+    Profile,
+    utcnow,
+)
 from money_profile_bot.services.analytics import callback_key, form_step, period_since
-from money_profile_bot.services.robokassa import Invoice, RobokassaClient
+from money_profile_bot.services.robokassa import (
+    Invoice,
+    OperationState,
+    RobokassaClient,
+    RobokassaError,
+)
 from money_profile_bot.services.store import Store
 
 
@@ -252,6 +267,177 @@ async def test_payment_modes_and_refunds_do_not_mix(analytics_store: Store) -> N
         )
 
 
+async def saved_payment(
+    store: Store, number: int, *, mode: str = "unknown", provider: str = "robokassa"
+) -> Order:
+    profile_id = await profile_for(store, number, start=False)
+    async with store.sessions() as session, session.begin():
+        profile = await session.get(Profile, profile_id)
+        order = Order(
+            code=f"MP-HISTORY{number}",
+            user_id=profile.user_id,
+            profile_id=profile_id,
+            provider=provider,
+            provider_invoice_id=number,
+            analytics_mode=mode,
+            amount_minor=14900,
+            receipt_email_encrypted="encrypted-email",
+            status="delivered",
+        )
+        session.add(order)
+        await session.flush()
+        session.add(Payment(order_id=order.id, amount_minor=14900, currency="RUB"))
+        return order
+
+
+async def test_legacy_payment_modes_require_provider_evidence_and_do_not_replay(
+    analytics_store: Store,
+) -> None:
+    store = analytics_store
+    store.notifications.recipients = frozenset({101})
+    orders = [await saved_payment(store, number) for number in range(1, 4)]
+    await saved_payment(store, 4, mode="test")
+    await saved_payment(store, 5, provider="fake")
+    async with store.sessions() as session, session.begin():
+        await session.execute(
+            update(Payment).where(Payment.order_id == orders[0].id).values(refund_status="finished")
+        )
+        await session.execute(update(Journey).values(mode="unknown", complete_history=False))
+        before_events = await session.scalar(select(func.count()).select_from(JourneyEvent))
+        before_audit = await session.scalar(select(func.count()).select_from(Event))
+    provider = cast(SimpleNamespace, store.robokassa)
+    provider.operation_state = AsyncMock(
+        return_value=OperationState(100, "verified", 14900, "card")
+    )
+    assert await store.reconcile_legacy_payment_modes() == 3
+    assert await store.reconcile_legacy_payment_modes() == 0
+    assert provider.operation_state.await_count == 3
+    totals = await store.analytics.finances(None)
+    assert totals["live"] == {"payments": 3, "refunds": 1, "net_minor": 29800}
+    assert totals["test"]["payments"] == 2
+    assert totals["unknown"]["payments"] == 0
+    assert (await store.analytics.funnel(None, "live"))["total"] == 0
+    async with store.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(PaymentNotification)) == 0
+        assert await session.scalar(select(func.count()).select_from(DeliveryItem)) == 0
+        assert all(
+            journey.mode == "unknown" and not journey.complete_history
+            for journey in (await session.scalars(select(Journey))).all()
+        )
+        assert await session.scalar(select(func.count()).select_from(JourneyEvent)) == before_events
+        assert await session.scalar(select(func.count()).select_from(Event)) == before_audit + 3
+
+
+@pytest.mark.parametrize(
+    "state,change",
+    [
+        (RobokassaError("unavailable"), {}),
+        (OperationState(50, "pending", 14900, "card"), {}),
+        (OperationState(100, "", 14900, "card"), {}),
+        (OperationState(100, "verified", 1, "card"), {}),
+        (OperationState(100, "verified", 14900, "card"), {"amount_minor": 1}),
+        (OperationState(100, "verified", 14900, "card"), {"currency": "USD"}),
+    ],
+)
+async def test_legacy_payment_modes_keep_unverified_records_unknown(
+    analytics_store: Store, state: OperationState | Exception, change: dict[str, object]
+) -> None:
+    store = analytics_store
+    order = await saved_payment(store, 1)
+    provider = cast(SimpleNamespace, store.robokassa)
+    provider.operation_state = AsyncMock(
+        side_effect=state if isinstance(state, Exception) else None, return_value=state
+    )
+    if change:
+        async with store.sessions() as session, session.begin():
+            await session.execute(
+                update(Payment).where(Payment.order_id == order.id).values(**change)
+            )
+    assert await store.reconcile_legacy_payment_modes() == 0
+    async with store.sessions() as session:
+        assert (await session.get(Order, order.id)).analytics_mode == "unknown"
+    store.analytics.mode = "test"
+    provider.operation_state.reset_mock()
+    assert await store.reconcile_legacy_payment_modes() == 0
+    provider.operation_state.assert_not_called()
+
+
+async def test_legacy_verification_advances_past_unverifiable_batch(analytics_store: Store) -> None:
+    store = analytics_store
+    for number in range(1, 22):
+        await saved_payment(store, number)
+    provider = cast(SimpleNamespace, store.robokassa)
+    provider.operation_state = AsyncMock(side_effect=RobokassaError("unavailable"))
+    assert await store.reconcile_legacy_payment_modes() == 0
+    assert provider.operation_state.await_count == 20
+    assert await store.reconcile_legacy_payment_modes() == 0
+    assert provider.operation_state.await_count == 21
+    assert len({call.args[0] for call in provider.operation_state.call_args_list}) == 21
+    await store.reconcile_legacy_payment_modes()
+    assert provider.operation_state.await_count == 41
+
+
+async def test_stats_counts_all_payments_separately_from_complete_journeys(
+    analytics_store: Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = analytics_store
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+    monkeypatch.setattr("money_profile_bot.bot.stats.utcnow", lambda: now)
+    for number in range(1, 7):
+        await saved_payment(store, number, mode="live" if number <= 5 else "test")
+    await saved_payment(store, 7)
+    await store.analytics.start(4)
+    for step in ("date_decade", "precision", "city", "confirm", "calculation", "free", "offer"):
+        await store.analytics.record(4, "step", step)
+    await store.analytics.record(4, "click", "buy", actor="user")
+    await store.analytics.record(4, "step", "paid")
+    async with store.sessions() as session, session.begin():
+        await session.execute(update(Payment).values(received_at=now))
+        await session.execute(update(Journey).values(created_at=now))
+        old_order = await session.scalar(select(Order).where(Order.provider_invoice_id == 5))
+        await session.execute(
+            update(Payment)
+            .where(Payment.order_id == old_order.id)
+            .values(received_at=now - timedelta(days=1), refund_status="finished")
+        )
+    router = Router()
+    register_stats(
+        router,
+        store,
+        Settings(
+            _env_file=None,
+            admin_telegram_ids="99",
+            payment_mode="robokassa",
+            robokassa_test_mode=False,
+        ),
+    )
+    sent: list[str] = []
+
+    async def capture(self: Message, text: str, **_: object) -> None:
+        sent.append(text)
+
+    monkeypatch.setattr(Message, "edit_text", capture)
+    monkeypatch.setattr(CallbackQuery, "answer", AsyncMock())
+    admin = TelegramUser(id=99, is_bot=False, first_name="Admin")
+    callback = CallbackQuery(
+        id="today",
+        from_user=admin,
+        chat_instance="x",
+        data="report:funnel:today",
+        message=Message(message_id=1, date=now, chat=Chat(id=99, type="private")),
+    )
+    handler = router.callback_query.handlers[0].callback
+    await handler(callback)
+    assert "Оплат за период: <b>4</b>" in sent[-1]
+    assert "Оплатили в этой группе: <b>1</b>" in sent[-1]
+    assert "Конверсия этой группы: 100,0%" in sent[-1]
+    assert "Из них возвращено" not in sent[-1]
+    assert "Старые оплаты на проверке: 1" in sent[-1]
+    await handler(callback.model_copy(update={"data": "report:funnel:7d"}))
+    assert "Оплат за период: <b>5</b>" in sent[-1]
+    assert "Из них возвращено: <b>1</b>" in sent[-1]
+
+
 async def test_delete_removes_journals_and_late_events_cannot_restore_them(
     analytics_store: Store,
 ) -> None:
@@ -370,10 +556,10 @@ async def test_stats_navigation_is_admin_only_and_fits_telegram(
         message_id=1, date=utcnow(), chat=Chat(id=1, type="private"), from_user=admin, text="/stats"
     )
     await command(message)
-    assert "Общая воронка · 7 дней" in sent[-1][0]
+    assert "Статистика · 7 дней" in sent[-1][0]
     assert "Запустили бота: <b>10</b>" in sent[-1][0]
     assert ("Завершили тест" in sent[-1][0]) == test_mode
-    assert ("Оплатили:" in sent[-1][0]) != test_mode
+    assert ("Оплатили в этой группе:" in sent[-1][0]) != test_mode
     assert len(sent[-1][1].inline_keyboard) == 1
     assert sent[-1][1].inline_keyboard[0][0].text == "Изменить период"
     await callback_handler(
@@ -418,7 +604,7 @@ async def test_stats_navigation_is_admin_only_and_fits_telegram(
             data=f"report:user:today:unknown:{user_id}:0",
         )
     )
-    assert "Общая воронка" in sent[-1][0]
+    assert "Воронка с полной историей" in sent[-1][0]
     assert "Telegram ID" not in sent[-1][0]
     assert "Где остановились" not in sent[-1][0]
     assert "Кнопки" not in sent[-1][0]

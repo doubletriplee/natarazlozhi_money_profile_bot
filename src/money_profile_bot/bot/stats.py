@@ -22,7 +22,7 @@ STAGES = (
     ("free", "Аватар отправлен"),
     ("offer", "Предложение отправлено"),
     ("buy", "Начали покупку"),
-    ("paid", "Оплатили"),
+    ("paid", "Оплатили в этой группе"),
 )
 
 
@@ -31,31 +31,46 @@ def register_stats(router: Router, store: Store, settings: Settings) -> None:
         now = utcnow()
         since = period_since(period, now)
         test = settings.payment_mode is PaymentMode.FAKE or settings.robokassa_test_mode
-        people = (await store.analytics.funnel(since, "test" if test else "live"))["people"]
+        mode = "test" if test else "live"
+        people = (await store.analytics.funnel(since, mode))["people"]
+        finances = await store.analytics.finances(since)
+        payments = finances[mode]
         dates = (
             f"{since.astimezone(MSK):%d.%m.%Y %H:%M} — {now.astimezone(MSK):%d.%m.%Y %H:%M} МСК"
             if since
             else f"По состоянию на {now.astimezone(MSK):%d.%m.%Y %H:%M} МСК"
         )
-        lines = [f"<b>Общая воронка · {PERIODS[period].lower()}</b>", dates, ""]
+        lines = [f"<b>Статистика · {PERIODS[period].lower()}</b>", dates, ""]
         if test:
             lines += ["Тестовый режим: покупки и списания денег не происходит.", ""]
+        payment_label = "Тестовых оплат за период" if test else "Оплат за период"
+        lines.append(f"{payment_label}: <b>{payments['payments']}</b>")
+        if payments["refunds"]:
+            lines.append(f"Из них возвращено: <b>{payments['refunds']}</b>")
+        if not test and finances["unknown"]["payments"]:
+            lines.append(f"Старые оплаты на проверке: {finances['unknown']['payments']}")
+        lines += [
+            "По дате подтверждения платежа, включая людей без истории шагов.",
+            "",
+            "<b>Воронка с полной историей</b>",
+            "Люди, начавшие прохождение за этот период.",
+            "",
+        ]
         for key, label in STAGES:
             if test and key == "paid":
-                label = "Завершили тест"
+                label = "Завершили тест в этой группе"
             elif test and key == "buy":
                 label = "Начали тест покупки"
             lines.append(f"{label}: <b>{len(people[key])}</b>")
         total, paid = len(people["start"]), len(people["paid"])
         rate = f"{paid / total * 100:.1f}".replace(".", ",") + "%" if total else "—"
-        result = "До конца теста дошли" if test else "До оплаты дошли"
         lines += [
             "",
-            f"<b>{result} {rate}</b>",
+            f"<b>Конверсия этой группы: {rate}</b>",
             f"{paid} из {total} человек",
             "",
-            "Люди, начавшие прохождение за этот период. Каждый человек учитывается один раз.",
-            "Только полностью отслеженные прохождения; журнал хранится 90 дней после последнего события.",
+            "В воронке каждый человек учитывается один раз. Старые неполные прохождения не включены.",
+            "История шагов хранится 90 дней после последнего события.",
         ]
         if choosing:
             buttons = [

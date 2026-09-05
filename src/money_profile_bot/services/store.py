@@ -141,6 +141,7 @@ class Store:
         )
         self._payment_lock = asyncio.Lock()
         self._admin_lock = asyncio.Lock()
+        self._legacy_payment_mode_cursor = ""
 
     async def ensure_user(self, telegram_id: int, source: str | None = None) -> User:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
@@ -894,6 +895,65 @@ class Store:
                 )
             )
             return CallbackResult(order.id, True)
+
+    async def reconcile_legacy_payment_modes(self) -> int:
+        """Classify old confirmations only with live provider evidence; never replay payment effects."""
+        if self.analytics.mode != "live":
+            return 0
+        query = (
+            select(Order.id, Order.provider_invoice_id)
+            .join(Payment)
+            .where(Order.provider == "robokassa", Order.analytics_mode == "unknown")
+            .order_by(Order.id)
+            .limit(20)
+        )
+        async with self.sessions() as session:
+            rows = (
+                await session.execute(query.where(Order.id > self._legacy_payment_mode_cursor))
+            ).all()
+            if not rows and self._legacy_payment_mode_cursor:
+                self._legacy_payment_mode_cursor = ""
+                rows = (await session.execute(query)).all()
+        updated = 0
+        for order_id, invoice_id in rows:
+            self._legacy_payment_mode_cursor = order_id
+            if invoice_id is None:
+                continue
+            try:
+                state = await self.robokassa.operation_state(invoice_id)
+            except RobokassaError:
+                logger.warning("legacy payment verification unavailable")
+                continue
+            if state.state_code != 100 or not state.operation_key:
+                continue
+            async with self.sessions() as session, session.begin():
+                # Recheck the persisted amounts and mode after the network request.
+                matching_payments = select(Payment.order_id).where(
+                    Payment.amount_minor == state.amount_minor, Payment.currency == "RUB"
+                )
+                verified_id = await session.scalar(
+                    update(Order)
+                    .where(
+                        Order.id == order_id,
+                        Order.id.in_(matching_payments),
+                        Order.provider == "robokassa",
+                        Order.analytics_mode == "unknown",
+                        Order.provider_invoice_id == invoice_id,
+                        Order.amount_minor == state.amount_minor,
+                        Order.currency == "RUB",
+                    )
+                    .values(analytics_mode="live")
+                    .returning(Order.id)
+                )
+                if verified_id:
+                    session.add(
+                        Event(
+                            name="payment_mode_verified",
+                            metadata_json=json.dumps({"order_id": verified_id, "mode": "live"}),
+                        )
+                    )
+                    updated += 1
+        return updated
 
     async def delivery_context(
         self, order_id: str

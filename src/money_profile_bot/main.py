@@ -56,6 +56,13 @@ async def maintenance(store: Store, settings: Settings) -> None:
                 await store.cleanup_expired_anonymized_payment_records(payment_record_cutoff)
         except Exception:
             logger.exception("data retention maintenance failed")
+        if settings.payment_mode is PaymentMode.ROBOKASSA and not settings.robokassa_test_mode:
+            try:
+                verified = await store.reconcile_legacy_payment_modes()
+                if verified:
+                    logger.info("verified legacy payment modes", extra={"count": verified})
+            except Exception:
+                logger.exception("legacy payment verification failed")
         try:
             await store.refresh_refunds()
         except RobokassaError:
