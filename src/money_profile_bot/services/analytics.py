@@ -11,6 +11,7 @@ from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.models import (
     DeliveryItem,
     DeliveryStatus,
+    Event,
     FsmRecord,
     Journey,
     JourneyEvent,
@@ -569,10 +570,70 @@ class Analytics:
                 "more": len(events) > 15,
             }
 
-    async def finances(self, since: datetime | None) -> dict[str, dict[str, int]]:
+    async def period_steps(self, since: datetime | None, until: datetime) -> dict[str, int]:
+        """Unique people per observed milestone date, including legacy facts, without cohort gating."""
+
+        def in_period(column: Any) -> Any:
+            return (column <= until) & (column >= since if since else True)
+
+        queries = {
+            "start": select(Event.user_id)
+            .where(Event.name == "bot_started", in_period(Event.created_at))
+            .union(
+                select(Journey.user_id).where(
+                    Journey.complete_history.is_(True), in_period(Journey.created_at)
+                )
+            ),
+            "calculated": select(Profile.user_id).where(
+                Profile.deleted_at.is_(None),
+                Profile.status.in_(("calculated", "paid")),
+                in_period(Profile.created_at),
+            ),
+            "offer": select(Profile.user_id)
+            .join(StrengthOffer)
+            .where(
+                Profile.deleted_at.is_(None),
+                StrengthOffer.status == DeliveryStatus.SENT,
+                in_period(StrengthOffer.sent_at),
+            )
+            .union(
+                select(Event.user_id).where(
+                    Event.name == "offer_viewed", in_period(Event.created_at)
+                )
+            ),
+            "buy": select(Order.user_id)
+            .where(in_period(Order.created_at))
+            .union(
+                select(Journey.user_id)
+                .join(JourneyEvent)
+                .where(
+                    JourneyEvent.kind == "click",
+                    JourneyEvent.key == "buy",
+                    in_period(JourneyEvent.created_at),
+                )
+            ),
+        }
+        result = {}
+        async with self.sessions() as session:
+            for key, query in queries.items():
+                result[key] = int(
+                    await session.scalar(
+                        select(func.count(User.id)).where(
+                            User.telegram_id_encrypted != "deleted", User.id.in_(query)
+                        )
+                    )
+                    or 0
+                )
+        return result
+
+    async def finances(
+        self, since: datetime | None, until: datetime | None = None
+    ) -> dict[str, dict[str, int]]:
         query = select(Order, Payment).join(Payment)
         if since:
             query = query.where(Payment.received_at >= since)
+        if until:
+            query = query.where(Payment.received_at <= until)
         async with self.sessions() as session:
             rows = (await session.execute(query)).all()
         result = {

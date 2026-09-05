@@ -32,6 +32,7 @@ from money_profile_bot.models import (
     Payment,
     PaymentNotification,
     Profile,
+    StrengthOffer,
     utcnow,
 )
 from money_profile_bot.services.analytics import callback_key, form_step, period_since
@@ -377,7 +378,7 @@ async def test_legacy_verification_advances_past_unverifiable_batch(analytics_st
     assert provider.operation_state.await_count == 41
 
 
-async def test_stats_counts_all_payments_separately_from_complete_journeys(
+async def test_stats_shows_one_payment_count_and_no_partial_cohort(
     analytics_store: Store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = analytics_store
@@ -429,13 +430,79 @@ async def test_stats_counts_all_payments_separately_from_complete_journeys(
     handler = router.callback_query.handlers[0].callback
     await handler(callback)
     assert "Оплат за период: <b>4</b>" in sent[-1]
-    assert "Оплатили в этой группе: <b>1</b>" in sent[-1]
-    assert "Конверсия этой группы: 100,0%" in sent[-1]
+    assert "Оплатили в этой группе" not in sent[-1]
+    assert "Конверсия" not in sent[-1]
+    assert "полной историей" not in sent[-1]
+    assert "Аватар рассчитан" in sent[-1]
     assert "Из них возвращено" not in sent[-1]
     assert "Старые оплаты на проверке: 1" in sent[-1]
     await handler(callback.model_copy(update={"data": "report:funnel:7d"}))
     assert "Оплат за период: <b>5</b>" in sent[-1]
     assert "Из них возвращено: <b>1</b>" in sent[-1]
+
+
+async def test_period_steps_use_legacy_facts_without_inventing_missing_transitions(
+    analytics_store: Store,
+) -> None:
+    store = analytics_store
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
+    since = period_since("today", now)
+    before = since - timedelta(seconds=1)
+    future = now + timedelta(seconds=1)
+    orders = [await saved_payment(store, n, mode="live") for n in range(1, 5)]
+    await store.delete_personal_data(4)
+    async with store.sessions() as session, session.begin():
+        await session.execute(update(Profile).values(created_at=since))
+        await session.execute(update(Order).values(created_at=since))
+        await session.execute(update(Payment).values(received_at=since))
+        await session.execute(update(Journey).values(created_at=since))
+        # A returning buyer started and calculated before today, but pays today.
+        await session.execute(
+            update(Profile).where(Profile.id == orders[1].profile_id).values(created_at=before)
+        )
+        await session.execute(
+            update(Order).where(Order.id == orders[1].id).values(created_at=before)
+        )
+        # Future timestamps must not enter any of today's numbers.
+        await session.execute(
+            update(Profile).where(Profile.id == orders[2].profile_id).values(created_at=future)
+        )
+        await session.execute(
+            update(Order).where(Order.id == orders[2].id).values(created_at=future)
+        )
+        await session.execute(
+            update(Payment).where(Payment.order_id == orders[2].id).values(received_at=future)
+        )
+        for order, when in (
+            (orders[0], since),
+            (orders[0], now),
+            (orders[1], before),
+            (orders[2], future),
+        ):
+            session.add(Event(user_id=order.user_id, name="bot_started", created_at=when))
+        session.add(
+            StrengthOffer(
+                profile_id=orders[0].profile_id, status="sent", available_at=since, sent_at=since
+            )
+        )
+        session.add(Event(user_id=orders[0].user_id, name="offer_viewed", created_at=since))
+        session.add(
+            StrengthOffer(profile_id=orders[1].profile_id, status="pending", available_at=since)
+        )
+        journey = await session.scalar(
+            select(Journey).where(Journey.profile_id == orders[1].profile_id)
+        )
+        session.add(JourneyEvent(journey_id=journey.id, kind="click", key="buy", created_at=now))
+    assert await store.analytics.period_steps(since, now) == {
+        "start": 1,
+        "calculated": 1,
+        "offer": 1,
+        "buy": 2,
+    }
+    # Payment records survive personal-data deletion; anonymous payments still count.
+    assert (await store.analytics.finances(since, now))["live"]["payments"] == 3
+    async with store.sessions() as session:
+        assert not any(j.complete_history for j in (await session.scalars(select(Journey))).all())
 
 
 async def test_delete_removes_journals_and_late_events_cannot_restore_them(
@@ -556,10 +623,10 @@ async def test_stats_navigation_is_admin_only_and_fits_telegram(
         message_id=1, date=utcnow(), chat=Chat(id=1, type="private"), from_user=admin, text="/stats"
     )
     await command(message)
-    assert "Статистика · 7 дней" in sent[-1][0]
-    assert "Запустили бота: <b>10</b>" in sent[-1][0]
-    assert ("Завершили тест" in sent[-1][0]) == test_mode
-    assert ("Оплатили в этой группе:" in sent[-1][0]) != test_mode
+    assert "Статистика · сегодня" in sent[-1][0]
+    assert "Начали прохождение: <b>11</b>" in sent[-1][0]
+    assert ("Тестовых оплат за период" in sent[-1][0]) == test_mode
+    assert ("Оплат за период:" in sent[-1][0]) != test_mode
     assert len(sent[-1][1].inline_keyboard) == 1
     assert sent[-1][1].inline_keyboard[0][0].text == "Изменить период"
     await callback_handler(
@@ -604,7 +671,8 @@ async def test_stats_navigation_is_admin_only_and_fits_telegram(
             data=f"report:user:today:unknown:{user_id}:0",
         )
     )
-    assert "Воронка с полной историей" in sent[-1][0]
+    assert "Начали прохождение" in sent[-1][0]
+    assert "Оплатили в этой группе" not in sent[-1][0]
     assert "Telegram ID" not in sent[-1][0]
     assert "Где остановились" not in sent[-1][0]
     assert "Кнопки" not in sent[-1][0]
