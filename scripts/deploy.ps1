@@ -127,7 +127,8 @@ try {
     ) -join "; "
 
     Write-Host "Deploying the same commit through one SSH session..."
-    & ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 $Server $remoteCommand
+    # Send the payload on stdin: embedded Compose/script data can exceed Windows' argv limit.
+    $remoteCommand | & ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 $Server "tr -d '\r' | bash -s"
     if ($LASTEXITCODE -ne 0) {
         throw "SSH deployment failed. Configure the deployment key for $Server once, then rerun this same command."
     }
