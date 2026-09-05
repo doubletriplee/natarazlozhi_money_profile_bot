@@ -592,6 +592,12 @@ def build_router(
     router.message.middleware(JourneyMiddleware(store.analytics))
     router.callback_query.middleware(JourneyMiddleware(store.analytics))
     register_stats(router, store, settings)
+
+    @router.message(Command("myid"))
+    async def myid(message: Message) -> None:
+        if message.from_user and message.chat.type == "private":
+            await message.answer(f"Твой Telegram ID: <code>{message.from_user.id}</code>")
+
     calculation_gate = CalculationGate()
 
     @router.message(CommandStart())

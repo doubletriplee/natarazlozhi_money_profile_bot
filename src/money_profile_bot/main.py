@@ -42,6 +42,7 @@ async def maintenance(store: Store, settings: Settings) -> None:
         try:
             now = datetime.now(UTC)
             await store.analytics.cleanup()
+            await store.notifications.cleanup()
             draft_cutoff = now - timedelta(days=settings.profile_draft_retention_days)
             await store.cleanup_expired_form_data(draft_cutoff)
             await store.cleanup_expired_drafts(draft_cutoff)
@@ -88,6 +89,8 @@ async def serve() -> None:
             database.sessions,
             crypto,
             robokassa,
+            payment_notification_ids=settings.payment_notification_ids,
+            payment_notifications_include_test=settings.payment_notifications_include_test,
             analytics_mode=(
                 "test"
                 if settings.payment_mode is PaymentMode.FAKE or settings.robokassa_test_mode

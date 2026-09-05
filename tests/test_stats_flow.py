@@ -67,6 +67,8 @@ async def test_real_router_flow_produces_unique_people_funnel(tmp_path: Path, mo
         CryptoBox(settings.app_encryption_key, settings.lookup_hmac_key),
         cast(RobokassaClient, AsyncMock()),
         analytics_mode="test",
+        payment_notification_ids=frozenset({200}),
+        payment_notifications_include_test=True,
     )
     session = TelegramSession()
     bot = Bot("42:abcdefghijklmnopqrstuvwxzy0123456789", session=session)
@@ -130,6 +132,8 @@ async def test_real_router_flow_produces_unique_people_funnel(tmp_path: Path, mo
         await click("birth_date:decade:1990")
         # An admin can inspect stats while filling out the form; it must not eat the date input.
         prior_prompt = session.sent[-1]
+        await send("/myid")
+        assert "Telegram ID: <code>100</code>" in session.sent[-1].text
         await send("/stats")
         assert "Общая воронка" in session.sent[-1].text
         session.sent.append(prior_prompt)
@@ -144,6 +148,9 @@ async def test_real_router_flow_produces_unique_people_funnel(tmp_path: Path, mo
         await click(f"strength:{profile_id}")
         await click(f"buy:{profile_id}")
         await delivery._deliver_pending_cycle()
+        notifications = [message for message in session.sent if message.chat.id == 200]
+        assert len(notifications) == 1
+        assert "Покупки и списания денег не произошло" in notifications[0].text
         funnel = await store.analytics.funnel(None, "test")
         assert all(len(people) == 1 for people in funnel["people"].values())
         assert len(funnel["people"]["paid"]) == 1

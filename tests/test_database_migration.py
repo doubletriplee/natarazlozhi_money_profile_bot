@@ -41,6 +41,7 @@ async def test_initialize_adds_delivery_schedule_column_to_existing_database(
     assert "form_reminders" in tables
     assert "journeys" in tables
     assert "journey_events" in tables
+    assert "payment_notifications" in tables
 
 
 @pytest.mark.asyncio

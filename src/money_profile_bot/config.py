@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     telegram_proxy_url: str = ""
     support_username: str = "simnatali"
     admin_telegram_ids: str = ""
+    payment_notification_telegram_ids: str = ""
+    payment_notifications_include_test: bool = False
     test_access_telegram_ids: str = ""
     pilot_access_telegram_ids: str = ""
     bootstrap_admin_on_first_start: bool = False
@@ -107,6 +109,13 @@ class Settings(BaseSettings):
         if normalized not in {"md5", "sha1", "sha256", "sha384", "sha512"}:
             raise ValueError("unsupported Robokassa hash algorithm")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_notification_ids(self) -> Settings:
+        ids = self._parse_id_list(self.payment_notification_telegram_ids)
+        if any(item <= 0 or item >= 2**52 for item in ids):
+            raise ValueError("payment notification recipients must be positive Telegram user IDs")
+        return self
 
     @model_validator(mode="after")
     def validate_runtime_safety(self) -> Settings:
@@ -257,6 +266,10 @@ class Settings(BaseSettings):
     @property
     def admin_ids(self) -> frozenset[int]:
         return self._parse_id_list(self.admin_telegram_ids)
+
+    @property
+    def payment_notification_ids(self) -> frozenset[int]:
+        return self._parse_id_list(self.payment_notification_telegram_ids)
 
     @property
     def test_access_ids(self) -> frozenset[int]:

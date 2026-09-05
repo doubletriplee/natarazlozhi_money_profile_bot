@@ -39,6 +39,7 @@ from money_profile_bot.models import (
     utcnow,
 )
 from money_profile_bot.services.analytics import Analytics
+from money_profile_bot.services.payment_notifications import PaymentNotifications
 from money_profile_bot.services.robokassa import (
     Invoice,
     RobokassaClient,
@@ -125,11 +126,19 @@ class Store:
         robokassa: RobokassaClient,
         *,
         analytics_mode: str = "unknown",
+        payment_notification_ids: frozenset[int] = frozenset(),
+        payment_notifications_include_test: bool = False,
     ) -> None:
         self.sessions = sessions
         self.crypto = crypto
         self.robokassa = robokassa
         self.analytics = Analytics(sessions, crypto, analytics_mode)
+        self.notifications = PaymentNotifications(
+            sessions,
+            crypto,
+            payment_notification_ids,
+            include_test=payment_notifications_include_test,
+        )
         self._payment_lock = asyncio.Lock()
         self._admin_lock = asyncio.Lock()
 
@@ -839,6 +848,7 @@ class Store:
                 session.add(payment)
             order.status = OrderStatus.PAID
             order.paid_at = utcnow()
+            await self.notifications.enqueue(session, order)
             await self.analytics.add(
                 session, order.user_id, "step", "paid", profile_id=order.profile_id
             )

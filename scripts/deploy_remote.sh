@@ -58,6 +58,10 @@ production_payment_request_action=""
 production_admin_request="$deploy_directory/.production-admin-request"
 production_admin_request_action=""
 production_admin_request_id=""
+notification_request="$deploy_directory/.payment-notifications-request"
+notification_request_applied=0
+notification_recipient_ids=""
+notification_include_test="false"
 deployment_started=0
 
 restore_previous_release() {
@@ -75,6 +79,9 @@ restore_previous_release() {
 }
 
 cleanup() {
+    if (( notification_request_applied == 1 )); then
+        rm -f -- "$notification_request"
+    fi
     rm -f -- "$rollback_env" "$rollback_compose" "$next_env" "$next_compose" "$staged_compose"
     if [[ -n "$pilot_payment_request_action" ]]; then
         rm -f -- "$pilot_payment_request"
@@ -289,6 +296,20 @@ else
 fi
 
 cp -p -- "$staged_compose" "$next_compose"
+if [[ -f "$notification_request" ]]; then
+    request="$(tr -d '\r\n' < "$notification_request")"
+    if [[ ! "$request" =~ ^([1-9][0-9]*(,[1-9][0-9]*)*)?:(true|false):([0-9a-f]{40})$ ]]; then
+        echo "Invalid payment notification configuration request." >&2
+        exit 1
+    fi
+    notification_recipient_ids="${BASH_REMATCH[1]}"
+    notification_include_test="${BASH_REMATCH[3]}"
+    [[ "${BASH_REMATCH[4]}" == "$commit" ]] || {
+        echo "Payment notification request targets a different commit." >&2
+        exit 1
+    }
+    notification_request_applied=1
+fi
 docker compose --env-file .env -f "$next_compose" config >/dev/null
 
 pulled=0
@@ -338,6 +359,10 @@ upsert_env "OPERATOR_EMAIL" "$operator_email" "$next_env"
 sed -i '/^PAYMENT_RETENTION_DAYS=/d' "$next_env"
 upsert_env "PAYMENT_CONTACT_RETENTION_DAYS" "$payment_contact_retention_days" "$next_env"
 upsert_env "PAYMENT_RECORD_RETENTION_YEARS" "$payment_record_retention_years" "$next_env"
+if (( notification_request_applied == 1 )); then
+    upsert_env "PAYMENT_NOTIFICATION_TELEGRAM_IDS" "$notification_recipient_ids" "$next_env"
+    upsert_env "PAYMENT_NOTIFICATIONS_INCLUDE_TEST" "$notification_include_test" "$next_env"
+fi
 if [[ "$pilot_payment_request_action" == "enable" ]]; then
     upsert_env "PILOT_LIVE_PAYMENT_REVIEWED" "true" "$next_env"
     upsert_env "LIVE_PAYMENTS_ENABLED" "true" "$next_env"

@@ -19,7 +19,7 @@ from aiogram.types import User as TelegramUser
 from sqlalchemy import func, select, update
 
 from money_profile_bot.bot.analytics import JourneyMiddleware
-from money_profile_bot.bot.stats import register_stats, selected
+from money_profile_bot.bot.stats import register_stats
 from money_profile_bot.config import Settings
 from money_profile_bot.crypto import CryptoBox
 from money_profile_bot.database import Database
@@ -184,7 +184,7 @@ async def test_cancel_and_back_do_not_complete_the_unanswered_step(analytics_sto
     funnel = await store.analytics.funnel(None, "live")
     assert len(funnel["reached"]["date_year"]) == 1
     assert not funnel["passed"]["date_month"]
-    assert not selected(await store.analytics.current(None, "all"), "day")
+    assert (await store.analytics.current(None, "all"))[0][1].step == "cancelled"
 
 
 async def test_errors_are_distinct_from_inactivity_and_resolve_on_success(
@@ -197,8 +197,8 @@ async def test_errors_are_distinct_from_inactivity_and_resolve_on_success(
     await store.analytics.record(1, "error", "calculation")
     await store.analytics.record(1, "error", "calculation")
     rows = await store.analytics.current(None, "all")
-    assert len(selected(rows, "error")) == 1
-    assert selected(rows, "hour") == []
+    assert len(rows) == 1
+    assert rows[0][1].error == "calculation"
     async with store.sessions() as session:
         assert (
             await session.scalar(
@@ -207,7 +207,7 @@ async def test_errors_are_distinct_from_inactivity_and_resolve_on_success(
             == 1
         )
     await store.analytics.record(1, "step", "free")
-    assert not selected(await store.analytics.current(None, "all"), "error")
+    assert (await store.analytics.current(None, "all"))[0][1].error is None
 
 
 async def test_payment_modes_and_refunds_do_not_mix(analytics_store: Store) -> None:
@@ -330,14 +330,24 @@ async def test_form_middleware_tracks_success_and_unknown_time_without_personal_
     assert all(e.key != "Private" for e in history["events"])
 
 
+@pytest.mark.parametrize("test_mode", [False, True])
 async def test_stats_navigation_is_admin_only_and_fits_telegram(
-    analytics_store: Store, monkeypatch: pytest.MonkeyPatch
+    analytics_store: Store, monkeypatch: pytest.MonkeyPatch, test_mode: bool
 ) -> None:
     store = analytics_store
+    store.analytics.mode = "test" if test_mode else "live"
     for index in range(10):
         profile_id = await profile_for(store, 100 + index)
         await store.analytics.record_profile(profile_id, "step", "free")
-    settings = Settings(_env_file=None, admin_telegram_ids="1")
+    settings = Settings(
+        _env_file=None,
+        admin_telegram_ids="1",
+        payment_mode="robokassa",
+        robokassa_test_mode=test_mode,
+    )
+    store.analytics.mode = "live" if test_mode else "test"
+    await store.ensure_user(999)
+    await store.analytics.start(999)
     router = Router()
     register_stats(router, store, settings)
     command = router.message.handlers[0].callback
@@ -360,7 +370,33 @@ async def test_stats_navigation_is_admin_only_and_fits_telegram(
         message_id=1, date=utcnow(), chat=Chat(id=1, type="private"), from_user=admin, text="/stats"
     )
     await command(message)
-    assert "Статистика" in sent[-1][0]
+    assert "Общая воронка · 7 дней" in sent[-1][0]
+    assert "Запустили бота: <b>10</b>" in sent[-1][0]
+    assert ("Завершили тест" in sent[-1][0]) == test_mode
+    assert ("Оплатили:" in sent[-1][0]) != test_mode
+    assert len(sent[-1][1].inline_keyboard) == 1
+    assert sent[-1][1].inline_keyboard[0][0].text == "Изменить период"
+    await callback_handler(
+        CallbackQuery(
+            id="period",
+            from_user=admin,
+            chat_instance="x",
+            message=message,
+            data="report:period:7d",
+        )
+    )
+    assert len(sent[-1][1].inline_keyboard) == 5
+    for period in ("today", "7d", "30d", "all"):
+        await callback_handler(
+            CallbackQuery(
+                id="period",
+                from_user=admin,
+                chat_instance="x",
+                message=message,
+                data=f"report:funnel:{period}",
+            )
+        )
+        assert len(sent[-1][1].inline_keyboard) == 1
     user_id = (await store.ensure_user(100)).id
     routes = ["home", "funnel", "steps", "users", "buttons", "money", "sources", "filters"]
     for view in routes:
@@ -382,7 +418,11 @@ async def test_stats_navigation_is_admin_only_and_fits_telegram(
             data=f"report:user:today:unknown:{user_id}:0",
         )
     )
-    assert "Telegram ID" in sent[-1][0]
+    assert "Общая воронка" in sent[-1][0]
+    assert "Telegram ID" not in sent[-1][0]
+    assert "Где остановились" not in sent[-1][0]
+    assert "Кнопки" not in sent[-1][0]
+    assert len(sent[-1][1].inline_keyboard) == 1
     before = len(sent)
     stranger = TelegramUser(id=2, is_bot=False, first_name="Other")
     await callback_handler(

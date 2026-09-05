@@ -102,6 +102,10 @@ class DeliveryWorker:
             self._heartbeat()
             await self.deliver_strength_offer(profile_id)
 
+        for notification_id in await self.store.notifications.pending_ids():
+            self._heartbeat()
+            await self.store.notifications.deliver(notification_id, self.bot)
+
     def _heartbeat(self) -> None:
         self._heartbeat_at = monotonic()
 

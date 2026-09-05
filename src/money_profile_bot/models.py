@@ -156,6 +156,26 @@ class Payment(Base):
     refund_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
+class PaymentNotification(Base):
+    __tablename__ = "payment_notifications"
+    __table_args__ = (
+        UniqueConstraint("order_id", "recipient_hash", name="uq_payment_notification_recipient"),
+        Index("ix_payment_notifications_pending", "status", "available_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"))
+    recipient_hash: Mapped[str] = mapped_column(String(64))
+    recipient_encrypted: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default=DeliveryStatus.PENDING)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    telegram_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 class Event(Base):
     __tablename__ = "events"
     __table_args__ = (Index("ix_events_name_created", "name", "created_at"),)
