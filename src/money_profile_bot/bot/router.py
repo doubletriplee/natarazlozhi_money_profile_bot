@@ -6,7 +6,7 @@ import html
 import re
 from contextlib import suppress
 from dataclasses import asdict
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +23,10 @@ from aiogram.types import (
     Message,
 )
 
+from money_profile_bot.bot.analytics import JourneyMiddleware
 from money_profile_bot.bot.calculation_gate import CalculationAdmission, CalculationGate
 from money_profile_bot.bot.states import DeleteForm, PaymentForm, ProfileForm
+from money_profile_bot.bot.stats import register_stats
 from money_profile_bot.config import PaymentMode, Settings
 from money_profile_bot.domain import BirthData, City, TimePrecision
 from money_profile_bot.models import OrderStatus
@@ -529,12 +531,15 @@ async def _send_free_avatar(
     profile_id: str,
     money_type: str,
     avatars: AvatarAssets,
+    store: Store | None = None,
 ) -> None:
     await message.answer_photo(
         FSInputFile(avatars.free_image(money_type)),
         caption=avatar_free_caption(money_type),
         reply_markup=_strength_trigger_keyboard(profile_id),
     )
+    if store:
+        await store.analytics.record_profile(profile_id, "step", "free")
 
 
 async def _accept_consent(
@@ -584,6 +589,9 @@ def build_router(
     delivery: DeliveryWorker,
 ) -> Router:
     router = Router(name="money-profile")
+    router.message.middleware(JourneyMiddleware(store.analytics))
+    router.callback_query.middleware(JourneyMiddleware(store.analytics))
+    register_stats(router, store, settings)
     calculation_gate = CalculationGate()
 
     @router.message(CommandStart())
@@ -593,6 +601,7 @@ def build_router(
         await _delete_start_command(message)
         source = command.args if command.args and START_RE.fullmatch(command.args) else "direct"
         await store.ensure_user(message.from_user.id, source)
+        await store.analytics.start(message.from_user.id)
         await store.cancel_form_reminder(message.from_user.id)
         newly_claimed_admin = False
         if settings.bootstrap_admin_on_first_start:
@@ -662,6 +671,8 @@ def build_router(
 
     @router.message(ProfileForm.birth_date)
     async def birth_date(message: Message, state: FSMContext) -> None:
+        if message.from_user:
+            await store.analytics.record(message.from_user.id, "input_rejected", "date_decade")
         data = await state.get_data()
         prompt, keyboard = _birth_date_picker(data)
         if message.from_user:
@@ -839,6 +850,8 @@ def build_router(
 
     @router.message(ProfileForm.birth_time)
     async def birth_time(message: Message, state: FSMContext) -> None:
+        if message.from_user:
+            await store.analytics.record(message.from_user.id, "input_rejected", "time_hour")
         data = await state.get_data()
         prompt, keyboard = _birth_time_picker(data)
         if message.from_user:
@@ -962,6 +975,7 @@ def build_router(
                 await state.update_data({FORM_PROMPT_MESSAGE_ID_KEY: reminder_message_id})
         if len(query) > 120:
             if message.from_user:
+                await store.analytics.record(message.from_user.id, "input_rejected", "city")
                 await _schedule_form_reminder(
                     store,
                     message.from_user.id,
@@ -977,6 +991,7 @@ def build_router(
         variants = await cities.search(query)
         if not variants:
             if message.from_user:
+                await store.analytics.record(message.from_user.id, "input_rejected", "city")
                 await _schedule_form_reminder(
                     store,
                     message.from_user.id,
@@ -1090,6 +1105,7 @@ def build_router(
             await callback.answer("Профиль уже рассчитывается…")
             return
         if admission is CalculationAdmission.BUSY:
+            await store.analytics.record(telegram_id, "error", "capacity")
             await callback.answer(
                 "Сейчас много расчётов. Попробуй ещё раз через минуту.",
                 show_alert=True,
@@ -1097,6 +1113,7 @@ def build_router(
             return
         try:
             await callback.answer("Рассчитываю профиль…")
+            await store.analytics.record(telegram_id, "step", "calculation")
             raw = await state.get_data()
             birth = BirthData(
                 name="",
@@ -1114,6 +1131,7 @@ def build_router(
                 raise RuntimeError("generated content failed validation: " + "; ".join(issues))
             profile_id = await store.save_calculation(callback.from_user.id, birth, facts, result)
         except Exception:
+            await store.analytics.record(telegram_id, "error", "calculation")
             await callback.message.answer(
                 f"Расчёт временно не завершён. Попробуй позже или напиши @{settings.support_username}."
             )
@@ -1130,6 +1148,7 @@ def build_router(
             profile_id=profile_id,
             money_type=result.money_type,
             avatars=avatars,
+            store=store,
         )
         delivery.notify()
 
@@ -1165,6 +1184,9 @@ def build_router(
             return
         if settings.payment_mode is PaymentMode.ROBOKASSA:
             if not settings.robokassa_invoice_creation_enabled:
+                await store.analytics.record(
+                    callback.from_user.id, "error", "payment_paused", profile_id=profile_id
+                )
                 await state.clear()
                 await callback.answer(
                     "Оплата временно приостановлена. Новые счета не создаются.",
@@ -1189,6 +1211,7 @@ def build_router(
                         ),
                     )
                     await callback.message.answer(text, reply_markup=keyboard)
+                    await store.analytics.record_profile(profile_id, "step", "invoice")
                 return
             await state.update_data(payment_profile_id=profile_id)
             await state.set_state(PaymentForm.email)
@@ -1208,6 +1231,13 @@ def build_router(
 
     @router.callback_query(PaymentForm.email, F.data == "payment:cancel")
     async def cancel_payment(callback: CallbackQuery, state: FSMContext) -> None:
+        raw = await state.get_data()
+        await store.analytics.record(
+            callback.from_user.id,
+            "step",
+            "payment_cancelled",
+            profile_id=raw.get("payment_profile_id"),
+        )
         await state.clear()
         await callback.answer("Оплата отменена")
         if callback.message:
@@ -1226,6 +1256,7 @@ def build_router(
             )
             return
         if not settings.robokassa_invoice_creation_enabled:
+            await store.analytics.record(message.from_user.id, "error", "payment_paused")
             await state.clear()
             await message.answer(
                 f"Оплата временно приостановлена. Новые счета не создаются. "
@@ -1234,6 +1265,7 @@ def build_router(
             return
         email = (message.text or "").strip()
         if not _receipt_email_is_valid(email):
+            await store.analytics.record(message.from_user.id, "input_rejected", "email")
             await message.answer(
                 "Не получилось распознать email. Пришли адрес в формате name@example.ru."
             )
@@ -1257,6 +1289,9 @@ def build_router(
                 amount_minor=settings.product_price_minor,
             )
         except (RobokassaError, RuntimeError):
+            await store.analytics.record(
+                message.from_user.id, "error", "invoice", profile_id=profile_id
+            )
             await message.answer(
                 f"Robokassa пока не создала счёт. Попробуй ещё раз или напиши "
                 f"@{settings.support_username}."
@@ -1265,6 +1300,7 @@ def build_router(
         await state.clear()
         text, keyboard = _payment_link_message(settings, link)
         await message.answer(text, reply_markup=keyboard)
+        await store.analytics.record_profile(profile_id, "step", "invoice")
 
     @router.callback_query(F.data.startswith("full:"))
     async def full_reading_offer(callback: CallbackQuery) -> None:
@@ -1281,6 +1317,8 @@ def build_router(
 
     @router.callback_query(F.data == "profile:new")
     async def new_profile(callback: CallbackQuery, state: FSMContext) -> None:
+        await store.ensure_user(callback.from_user.id)
+        await store.analytics.start(callback.from_user.id)
         await store.cancel_form_reminder(callback.from_user.id)
         await _schedule_form_reminder(
             store,
@@ -1308,12 +1346,16 @@ def build_router(
                 delivery.notify()
             return
         _, result = await store.get_profile_result(access.profile_id)
+        await store.analytics.record(
+            message.from_user.id, "action", "profile", profile_id=access.profile_id, actor="user"
+        )
         await store.schedule_strength_offer(access.profile_id)
         await _send_free_avatar(
             message,
             profile_id=access.profile_id,
             money_type=result.money_type,
             avatars=avatars,
+            store=store,
         )
         delivery.notify()
 
@@ -1353,58 +1395,6 @@ def build_router(
             await callback.message.answer(
                 "Персональные данные удалены. Новый расчёт можно начать с /start."
             )
-
-    @router.message(Command("stats"))
-    async def stats(message: Message) -> None:
-        if not message.from_user or not await store.is_admin(
-            message.from_user.id, settings.admin_ids
-        ):
-            return
-        await message.answer(
-            "Выберите период:",
-            reply_markup=_keyboard(
-                ("Сегодня", "stats:today"),
-                ("7 дней", "stats:7d"),
-                ("30 дней", "stats:30d"),
-                ("Всё время", "stats:all"),
-            ),
-        )
-
-    @router.callback_query(F.data.startswith("stats:"))
-    async def stats_period(callback: CallbackQuery) -> None:
-        if not await store.is_admin(callback.from_user.id, settings.admin_ids):
-            await callback.answer()
-            return
-        period = (callback.data or "").split(":", 1)[1]
-        now = datetime.now(UTC)
-        since = {
-            "today": datetime(now.year, now.month, now.day, tzinfo=UTC),
-            "7d": now - timedelta(days=7),
-            "30d": now - timedelta(days=30),
-            "all": None,
-        }.get(period)
-        if period not in {"today", "7d", "30d", "all"}:
-            await callback.answer("Неизвестный период", show_alert=True)
-            return
-        data = await store.stats(since)
-        first = (
-            ", ".join(f"{source or 'direct'}: {count}" for source, count in data["first_sources"])
-            or "—"
-        )
-        last = (
-            ", ".join(f"{source or 'direct'}: {count}" for source, count in data["last_sources"])
-            or "—"
-        )
-        text = (
-            f"Пользователи: {data['users']}\nАнкеты: {data['profiles']}\n"
-            f"Офферы: {data['offers']}\nОплаты: {data['payments']}\n"
-            f"Конверсия оффер → оплата: {data['conversion']:.1f}%\n"
-            f"Чистая выручка после возвратов: {data['revenue_rub']} ₽\n\n"
-            f"First-touch: {first}\nLast-touch: {last}"
-        )
-        await callback.answer()
-        if callback.message:
-            await callback.message.answer(text)
 
     @router.message(Command("refund"))
     async def refund(message: Message, command: CommandObject) -> None:

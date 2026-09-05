@@ -39,3 +39,22 @@ async def test_initialize_adds_delivery_schedule_column_to_existing_database(
     assert "available_at" in columns
     assert "strength_offers" in tables
     assert "form_reminders" in tables
+    assert "journeys" in tables
+    assert "journey_events" in tables
+
+
+@pytest.mark.asyncio
+async def test_existing_orders_get_unknown_mode_without_rewriting_values(tmp_path: Path) -> None:
+    path = tmp_path / "legacy_orders.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE orders (id VARCHAR(36) PRIMARY KEY, amount_minor INTEGER)")
+    connection.execute("INSERT INTO orders VALUES ('legacy-order', 14900)")
+    connection.commit()
+    connection.close()
+    database = Database(f"sqlite+aiosqlite:///{path.as_posix()}")
+    await database.initialize()
+    await database.initialize()
+    async with database.engine.connect() as session:
+        row = (await session.execute(text("SELECT amount_minor, analytics_mode FROM orders"))).one()
+        assert tuple(row) == (14900, "unknown")
+    await database.close()

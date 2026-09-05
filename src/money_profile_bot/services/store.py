@@ -27,6 +27,7 @@ from money_profile_bot.models import (
     Feedback,
     FormReminder,
     FsmRecord,
+    Journey,
     Order,
     OrderStatus,
     Payment,
@@ -37,6 +38,7 @@ from money_profile_bot.models import (
     new_id,
     utcnow,
 )
+from money_profile_bot.services.analytics import Analytics
 from money_profile_bot.services.robokassa import (
     Invoice,
     RobokassaClient,
@@ -121,10 +123,13 @@ class Store:
         sessions: async_sessionmaker[AsyncSession],
         crypto: CryptoBox,
         robokassa: RobokassaClient,
+        *,
+        analytics_mode: str = "unknown",
     ) -> None:
         self.sessions = sessions
         self.crypto = crypto
         self.robokassa = robokassa
+        self.analytics = Analytics(sessions, crypto, analytics_mode)
         self._payment_lock = asyncio.Lock()
         self._admin_lock = asyncio.Lock()
 
@@ -223,6 +228,8 @@ class Store:
                 rules_version=result.rules_version,
             )
             session.add(profile)
+            await session.flush()
+            await self.analytics.bind_profile(session, user.id, profile_id)
         return profile_id
 
     async def get_profile_result(self, profile_id: str) -> tuple[BirthData, GeneratedProfile]:
@@ -450,6 +457,9 @@ class Store:
             reminder.telegram_message_id = message_id
             reminder.last_error_code = None
             reminder.sent_at = utcnow()
+            await self.analytics.add(
+                session, reminder.user_id, "reminder", "reminder", actor="automatic"
+            )
 
     async def mark_form_reminder_failed(
         self, reminder_id: str, error_code: str, payload_token: str
@@ -465,6 +475,9 @@ class Store:
             reminder.status = DeliveryStatus.FAILED
             reminder.last_error_code = error_code
             reminder.available_at = utcnow() + OFFER_RETRY_DELAY
+            await self.analytics.add(
+                session, reminder.user_id, "error", "reminder", actor="automatic"
+            )
 
     async def schedule_strength_offer(self, profile_id: str) -> None:
         async with self.sessions() as session, session.begin():
@@ -553,7 +566,9 @@ class Store:
                 money_type=str(result_data["money_type"]),
             )
 
-    async def mark_strength_offer_sent(self, offer_id: str, message_id: int) -> None:
+    async def mark_strength_offer_sent(
+        self, offer_id: str, message_id: int, *, automatic: bool = True
+    ) -> None:
         async with self.sessions() as session, session.begin():
             offer = await session.get(StrengthOffer, offer_id)
             if not offer or offer.status == DeliveryStatus.SENT:
@@ -565,6 +580,14 @@ class Store:
             profile = await session.get(Profile, offer.profile_id)
             if profile:
                 session.add(Event(user_id=profile.user_id, name="offer_viewed"))
+                await self.analytics.add(
+                    session,
+                    profile.user_id,
+                    "step",
+                    "offer",
+                    profile_id=profile.id,
+                    actor="automatic" if automatic else "system",
+                )
 
     async def mark_strength_offer_failed(self, offer_id: str, error_code: str) -> None:
         async with self.sessions() as session, session.begin():
@@ -574,6 +597,11 @@ class Store:
             offer.status = DeliveryStatus.FAILED
             offer.last_error_code = error_code
             offer.available_at = utcnow() + OFFER_RETRY_DELAY
+            profile = await session.get(Profile, offer.profile_id)
+            if profile:
+                await self.analytics.add(
+                    session, profile.user_id, "error", "offer", profile_id=profile.id
+                )
 
     async def latest_profile_for_user(self, telegram_id: int) -> Profile | None:
         digest = self.crypto.lookup(str(telegram_id), context="telegram-user")
@@ -668,6 +696,7 @@ class Store:
                             user_id=user.id,
                             profile_id=profile_id,
                             amount_minor=amount_minor,
+                            analytics_mode=self.analytics.mode,
                             provider_invoice_id=invoice_id,
                             receipt_email_encrypted=encrypted_email,
                             status=OrderStatus.PENDING,
@@ -750,6 +779,7 @@ class Store:
                                 profile_id=profile_id,
                                 amount_minor=0,
                                 provider="fake",
+                                analytics_mode="test",
                                 provider_invoice_id=invoice_id,
                                 receipt_email_encrypted=self.crypto.encrypt(
                                     "test-without-receipt", context=f"order.email:{order_id}"
@@ -809,6 +839,9 @@ class Store:
                 session.add(payment)
             order.status = OrderStatus.PAID
             order.paid_at = utcnow()
+            await self.analytics.add(
+                session, order.user_id, "step", "paid", profile_id=order.profile_id
+            )
             profile = await session.get(Profile, order.profile_id)
             if not profile:
                 raise RuntimeError("profile for paid order not found")
@@ -947,10 +980,29 @@ class Store:
             item = await session.get(DeliveryItem, item_id)
             if not item:
                 return
+            previous_status = item.status
             item.status = status
             item.attempts += 1
             item.telegram_message_id = message_id or item.telegram_message_id
             item.last_error_code = error_code
+            order = await session.get(Order, item.order_id)
+            if (
+                order
+                and previous_status != status
+                and item.kind in {"avatar_result", "full_reading_offer"}
+            ):
+                if status is DeliveryStatus.SENT:
+                    await self.analytics.add(
+                        session,
+                        order.user_id,
+                        "step",
+                        "delivered" if item.kind == "avatar_result" else "full_offer",
+                        profile_id=order.profile_id,
+                    )
+                elif status is DeliveryStatus.FAILED:
+                    await self.analytics.add(
+                        session, order.user_id, "error", "delivery", profile_id=order.profile_id
+                    )
             if status is DeliveryStatus.SENT:
                 sent_at = utcnow()
                 item.sent_at = sent_at
@@ -1194,6 +1246,9 @@ class Store:
                     order.status = OrderStatus.REFUNDED
                     order.refunded_at = utcnow()
                     session.add(Event(user_id=order.user_id, name="payment_refunded"))
+                    await self.analytics.add(
+                        session, order.user_id, "fact", "refund", profile_id=order.profile_id
+                    )
                     completed += 1
         return completed
 
@@ -1464,6 +1519,7 @@ class Store:
                     .values(telegram_message_id=None)
                 )
             await session.execute(delete(FormReminder).where(FormReminder.user_id == user.id))
+            await session.execute(delete(Journey).where(Journey.user_id == user.id))
             await session.execute(
                 update(Event).where(Event.user_id == user.id).values(user_id=None)
             )

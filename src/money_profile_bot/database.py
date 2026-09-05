@@ -43,6 +43,16 @@ class Database:
                     await connection.execute(
                         text("ALTER TABLE delivery_items ADD COLUMN available_at DATETIME")
                     )
+                order_columns = {
+                    str(row[1])
+                    for row in (await connection.execute(text("PRAGMA table_info(orders)"))).all()
+                }
+                if "analytics_mode" not in order_columns:
+                    await connection.execute(
+                        text(
+                            "ALTER TABLE orders ADD COLUMN analytics_mode VARCHAR(16) NOT NULL DEFAULT 'unknown'"
+                        )
+                    )
 
     async def session(self) -> AsyncIterator[AsyncSession]:
         async with self.sessions() as session:

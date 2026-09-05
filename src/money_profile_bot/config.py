@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     source_repository_url: str = "https://github.com/doubletriplee/natarazlozhi_money_profile_bot"
     source_commit: str = "development"
 
-    legal_docs_version: str = "2026-09-03.1"
+    legal_docs_version: str = "2026-09-05.1"
     methodology_approved: bool = True
     golden_cards_approved: bool = False
     operator_name: str = "Симоненко Наталья Сергеевна"

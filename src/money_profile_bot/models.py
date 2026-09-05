@@ -115,6 +115,7 @@ class Order(Base):
     amount_minor: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
     provider: Mapped[str] = mapped_column(String(32), default="robokassa")
+    analytics_mode: Mapped[str] = mapped_column(String(16), default="unknown")
     provider_invoice_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     provider_invoice_uuid: Mapped[str | None] = mapped_column(
         String(64), unique=True, nullable=True
@@ -167,6 +168,38 @@ class Event(Base):
     first_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Journey(Base):
+    __tablename__ = "journeys"
+    __table_args__ = (Index("ix_journeys_user_id_id", "user_id", "id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    profile_id: Mapped[str | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    mode: Mapped[str] = mapped_column(String(16), default="unknown")
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    complete_history: Mapped[bool] = mapped_column(Boolean, default=False)
+    step: Mapped[str] = mapped_column(String(32), default="unknown")
+    error: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    step_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class JourneyEvent(Base):
+    __tablename__ = "journey_events"
+    __table_args__ = (Index("ix_journey_events_journey_id_id", "journey_id", "id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    journey_id: Mapped[int] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(24))
+    key: Mapped[str] = mapped_column(String(32))
+    actor: Mapped[str] = mapped_column(String(16), default="system")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

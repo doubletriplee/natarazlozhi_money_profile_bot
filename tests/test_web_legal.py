@@ -243,7 +243,10 @@ async def test_legal_pages_render_final_documents_without_test_notice() -> None:
     assert "simonenkons@ya.ru" in privacy
     assert "simonenkons@ya.ru" in terms
     assert "simonenkons@ya.ru" in consent
-    assert "Редакция от 3 сентября 2026 года" in privacy
+    assert "Редакция от 5 сентября 2026 года" in privacy
+    assert "90 дней" in privacy
+    assert "технические события использования" in privacy
+    assert "90 дней" in consent
     assert "не менее пяти лет" in privacy
     assert "30 дней" in privacy
     assert "REG.RU" in privacy

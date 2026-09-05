@@ -10,6 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 from aiohttp import web
 
 from money_profile_bot.bot.access import PrivateAccessMiddleware
@@ -40,6 +41,7 @@ async def maintenance(store: Store, settings: Settings) -> None:
     while True:
         try:
             now = datetime.now(UTC)
+            await store.analytics.cleanup()
             draft_cutoff = now - timedelta(days=settings.profile_draft_retention_days)
             await store.cleanup_expired_form_data(draft_cutoff)
             await store.cleanup_expired_drafts(draft_cutoff)
@@ -82,7 +84,16 @@ async def serve() -> None:
 
     async with aiohttp.ClientSession() as http_session:
         robokassa = RobokassaClient(settings, http_session)
-        store = Store(database.sessions, crypto, robokassa)
+        store = Store(
+            database.sessions,
+            crypto,
+            robokassa,
+            analytics_mode=(
+                "test"
+                if settings.payment_mode is PaymentMode.FAKE or settings.robokassa_test_mode
+                else "live"
+            ),
+        )
         if not settings.web_only:
             if not settings.bot_token:
                 raise ValueError("BOT_TOKEN is required when WEB_ONLY=false")
@@ -111,7 +122,8 @@ async def serve() -> None:
                     extra={"count": backfilled_reminders},
                 )
             storage = EncryptedDatabaseStorage(database.sessions, crypto)
-            dispatcher = Dispatcher(storage=storage)
+            await store.analytics.backfill(bot.id)
+            dispatcher = Dispatcher(storage=storage, events_isolation=SimpleEventIsolation())
             if settings.app_env in {Environment.STAGING, Environment.PILOT}:
                 if settings.app_env is Environment.STAGING:
                     allowed_ids = settings.test_access_ids

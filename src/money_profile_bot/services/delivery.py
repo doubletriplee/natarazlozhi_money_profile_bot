@@ -253,7 +253,9 @@ class DeliveryWorker:
                 )
                 await self.store.mark_strength_offer_failed(context.offer_id, type(exc).__name__)
                 return False
-            await self.store.mark_strength_offer_sent(context.offer_id, sent.message_id)
+            await self.store.mark_strength_offer_sent(
+                context.offer_id, sent.message_id, automatic=not force
+            )
             return True
 
     def _strength_offer_keyboard(self, profile_id: str) -> InlineKeyboardMarkup:

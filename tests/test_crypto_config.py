@@ -43,7 +43,7 @@ def test_development_settings_generate_keys() -> None:
     assert settings.backup_interval_hours == 6
     assert settings.backup_max_age_hours == 8
     assert not settings.backup_required
-    assert settings.legal_docs_version == "2026-09-03.1"
+    assert settings.legal_docs_version == "2026-09-05.1"
     assert settings.operator_name == "Симоненко Наталья Сергеевна"
     assert settings.operator_inn == "026108860870"
     assert settings.operator_email == "simonenkons@ya.ru"
