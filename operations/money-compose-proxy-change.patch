@@ -1,0 +1,12 @@
+--- deployed-compose.yaml.before
++++ deployed-compose.yaml.after
+@@ -9,9 +9,6 @@
+       AVATAR_ASSET_DIRECTORY: /app/assets/avatars
+       PDF_OUTPUT_DIRECTORY: /data/pdfs
+       BACKUP_STATUS_PATH: /data/backups/status.json
+-    depends_on:
+-      telegram-proxy:
+-        condition: service_healthy
+     ports:
+       - "127.0.0.1:18080:8080"
+     volumes:
