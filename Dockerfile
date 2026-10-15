@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS builder
+FROM python:3.14-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -8,7 +8,7 @@ COPY src ./src
 RUN python -m pip install --no-cache-dir --upgrade "pip>=26.2,<27" \
     && python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       fonts-dejavu-core fonts-liberation2 \
